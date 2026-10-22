@@ -50,7 +50,8 @@ vmware-dashboard/
       main.py                 # daemon loop, signals, --once
     web/
       app.py                  # FastAPI app, basic auth, routes, gzip
-      views.py                # SQLite → view model; grouping, sorting, totals (pure, unit-tested)
+      queries.py              # SQLite rows → Inventory + SyncStatus
+      views.py                # Inventory → view model; grouping, sorting, totals, badge (pure, unit-tested)
       templates/index.html
       static/style.css
       static/app.js           # search, collapse, templates toggle, theme, auto-refresh
@@ -100,7 +101,11 @@ vms        (moref TEXT PK, host_moref TEXT NULL, name TEXT, description TEXT, fo
             datastore_path TEXT)   -- e.g. "[ds-ssd01] web01/"
 disks      (vm_moref TEXT, key INT, label TEXT, capacity_bytes INT, used_bytes INT, datastore TEXT)
 tags       (vm_moref TEXT, category TEXT, name TEXT)
+meta       (key TEXT PK, value TEXT)  -- vcenter_host, datacenter, sync_interval_minutes, snapshot_id
 ```
+
+`meta` is written with each snapshot so the web process needs no vCenter settings: it reads the header
+text and the stale threshold from here. `snapshot_id` = id of the sync run that wrote the snapshot.
 
 Timestamps are ISO 8601 UTC; the web renders them in the server's local time as `DD.MM.YYYY HH:MM`.
 Only the latest snapshot is kept. `sync_runs` keeps the last 500 rows.
@@ -174,7 +179,7 @@ start time), exit cleanly on SIGTERM/SIGINT (finishes or abandons the current ru
 | Uptime | bucket from `boot_time` | <1 day, 1–7 d, 7–30 d, 30–90 d, >90 d, Not running | — |
 | Guest OS | `guest_os` | A–Z | — |
 
-**Client JS (`app.js`, target under 4 KB minified, no libraries):**
+**Client JS (`app.js`, under 8 KB unminified, no libraries, no build step):**
 - Search: each VM row carries `data-q` (lowercased text of every visible field plus host, cluster).
   Space-separated terms, all must match. Non-matching rows hidden; empty groups hidden; group totals,
   summary and count recomputed from `data-*` numbers on rows. Matches highlighted with the CSS Custom
@@ -193,7 +198,7 @@ the last success is older than 3× interval; grey "No sync yet" empty state when
 
 **Missing/invalid DB:** page renders with the "No sync yet" empty state, never a 500.
 
-**Styling:** system font stack, no web fonts, one CSS file (target under 6 KB), colors as CSS tokens
+**Styling:** system font stack, no web fonts, one CSS file (under 8 KB unminified), colors as CSS tokens
 with a light set on `:root` and a dark set on `:root[data-theme="dark"]`.
 
 ## 8. Logging
