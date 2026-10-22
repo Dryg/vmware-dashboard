@@ -20,6 +20,7 @@ VM_PROPS = [
 ]
 
 PC = vmodl.query.PropertyCollector
+CONNECT_TIMEOUT_S = 120  # socket timeout; without it a stuck vCenter blocks the collector forever
 
 
 def host_port(host: str) -> tuple[str, int]:
@@ -65,7 +66,8 @@ def connect(settings: CollectorSettings):
     host, port = host_port(settings.vcenter_host)
     return SmartConnect(host=host, port=port, user=settings.vcenter_user,
                         pwd=settings.vcenter_password.get_secret_value(),
-                        disableSslCertValidation=not settings.vcenter_verify_ssl)
+                        disableSslCertValidation=not settings.vcenter_verify_ssl,
+                        httpConnectionTimeout=CONNECT_TIMEOUT_S)
 
 
 def disconnect(si) -> None:
@@ -99,19 +101,21 @@ def _collect(si, root, obj_type, paths: list[str], extra=None) -> dict[str, dict
         view.Destroy()
 
 
-def _find_datacenter(si, name: str):
-    for entity in si.RetrieveContent().rootFolder.childEntity:
-        if isinstance(entity, vim.Datacenter) and entity.name == name:
-            return entity
-    raise ValueError(f"Datacenter not found: {name}")
+def find_datacenter(si, name: str):
+    """Find a datacenter by name anywhere in the inventory (datacenters can sit inside folders)."""
+    found = {moref: props for moref, props in
+             _collect(si, si.RetrieveContent().rootFolder, vim.Datacenter, ["name", "vmFolder"]).items()
+             if props.get("name") == name}
+    if not found:
+        raise ValueError(f"Datacenter not found: {name}")
+    moref = next(iter(found))
+    return vim.Datacenter(moref, si._stub), {moref: found[moref]}
 
 
 def fetch_raw(si, settings: CollectorSettings) -> RawInventory:
     content = si.RetrieveContent()
     if settings.vcenter_datacenter:
-        dc = _find_datacenter(si, settings.vcenter_datacenter)
-        root = dc
-        datacenters = {dc._moId: {"name": dc.name, "vmFolder": dc.vmFolder._moId}}
+        root, datacenters = find_datacenter(si, settings.vcenter_datacenter)
     else:
         root = content.rootFolder
         datacenters = _collect(si, root, vim.Datacenter, ["name", "vmFolder"])

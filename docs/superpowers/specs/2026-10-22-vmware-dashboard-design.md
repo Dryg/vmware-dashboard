@@ -101,11 +101,12 @@ vms        (moref TEXT PK, host_moref TEXT NULL, name TEXT, description TEXT, fo
             datastore_path TEXT)   -- e.g. "[ds-ssd01] web01/"
 disks      (vm_moref TEXT, key INT, label TEXT, capacity_bytes INT, used_bytes INT, datastore TEXT)
 tags       (vm_moref TEXT, category TEXT, name TEXT)
-meta       (key TEXT PK, value TEXT)  -- vcenter_host, datacenter, sync_interval_minutes, snapshot_id
+meta       (key TEXT PK, value TEXT)  -- vcenter_host, datacenter, sync_interval_minutes, snapshot_id, snapshot_uid
 ```
 
 `meta` is written with each snapshot so the web process needs no vCenter settings: it reads the header
-text and the stale threshold from here. `snapshot_id` = id of the sync run that wrote the snapshot.
+text and the stale threshold from here. `snapshot_id` = id of the sync run that wrote the snapshot;
+`snapshot_uid` = random id per written snapshot (run ids restart when the database is recreated).
 
 Timestamps are ISO 8601 UTC; the web renders them in the server's local time as `DD.MM.YYYY HH:MM`.
 Only the latest snapshot is kept. `sync_runs` keeps the last 500 rows.
@@ -147,7 +148,7 @@ start time), exit cleanly on SIGTERM/SIGINT (finishes or abandons the current ru
 
 **Routes**
 - `GET /` (auth): full page. Query `?group=host|folder|cluster|datastore|power|uptime|os` (default `host`).
-- `GET /status.json` (auth): `{"snapshot_id", "last_run": {"status","started_at","finished_at","error"}, "last_success_at", "interval_minutes"}`.
+- `GET /status.json` (auth): `{"snapshot_id", "snapshot_uid", "last_run": {"status","started_at","finished_at","error"}, "last_success_at", "interval_minutes"}`.
 - `GET /healthz` (no auth): `200 {"ok": true, "last_success_age_s": N}` or `503` if no success in 3× interval.
 - `GET /static/*`: long cache headers; URL carries a content hash query string for cache busting.
 - GZip middleware on all responses.
@@ -189,7 +190,7 @@ start time), exit cleanly on SIGTERM/SIGINT (finishes or abandons the current ru
 - Collapse: per group, stored in `sessionStorage`.
 - Theme: light by default; toggle sets `data-theme="dark"` on `<html>`, stored in `localStorage`
   (`vmdash.theme`). A tiny inline script in `<head>` applies it before first paint (no flash).
-- Auto-refresh: poll `/status.json` every 30 s. Badge updates in place (Syncing…). When `snapshot_id`
+- Auto-refresh: poll `/status.json` every 30 s. Badge updates in place (Syncing…). When `snapshot_uid`
   changes, reload; search text is kept in `sessionStorage` and restored.
 
 **Sync badge states:** green "Synced <time>" (+ next sync time); amber pulsing "Syncing… started <time>";

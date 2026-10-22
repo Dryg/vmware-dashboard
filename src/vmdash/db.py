@@ -2,6 +2,7 @@
 
 import logging
 import sqlite3
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -66,14 +67,21 @@ def connect_rw(path: Path) -> sqlite3.Connection:
 
 def connect_ro(path: Path) -> sqlite3.Connection | None:
     """Open read-only; None when the file is missing or has another schema version."""
-    if not path.exists():
+    if not path.is_file():
         return None
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
-    conn.row_factory = sqlite3.Row
-    if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-        conn.close()
+    try:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error as e:
+        log.warning("cannot open %s: %s", path, e)
         return None
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        if conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION:
+            return conn
+    except sqlite3.Error as e:
+        log.warning("cannot read %s: %s", path, e)
+    conn.close()
+    return None
 
 
 def start_run(conn: sqlite3.Connection, now: datetime | None = None) -> int:
@@ -131,7 +139,8 @@ def write_snapshot(conn: sqlite3.Connection, inv: Inventory, run_id: int, interv
         conn.executemany(
             "INSERT INTO meta VALUES (?, ?)",
             [("vcenter_host", inv.vcenter_host), ("datacenter", inv.datacenter),
-             ("sync_interval_minutes", str(interval_minutes)), ("snapshot_id", str(run_id))],
+             ("sync_interval_minutes", str(interval_minutes)), ("snapshot_id", str(run_id)),
+             ("snapshot_uid", uuid.uuid4().hex)],
         )
         conn.execute("COMMIT")
     except BaseException:

@@ -55,7 +55,8 @@ def test_page_renders(client):
     r = get(client)
     assert r.status_code == 200
     assert "esx01.lab.local" in r.text
-    assert 'data-snapshot="12"' in r.text
+    assert 'data-snapshot="' in r.text and 'data-snapshot=""' not in r.text
+    assert "snapshot #12" in r.text
     assert "vcsa01.lab.local · DC-Main" in r.text
     assert "Synced 22.10.2026 12:00" in r.text
     assert '<html lang="en" data-theme="light">' in r.text
@@ -133,6 +134,7 @@ def test_failed_sync_shows_banner(tmp_path):
 def test_status_json(client):
     data = get(client, "/status.json").json()
     assert data["snapshot_id"] == 12
+    assert len(data["snapshot_uid"]) == 32
     assert set(data["last_run"]) == {"status", "started_at", "finished_at", "error"}
     assert data["last_run"]["status"] == "success"
     assert data["last_success_at"] == "2026-10-22T12:00:00+00:00"
@@ -215,3 +217,38 @@ def test_app_js_size():
 
 def test_page_loads_app_js(client):
     assert '<script src="/static/app.js?v=' in get(client).text
+
+
+@pytest.mark.parametrize("make_bad", [
+    lambda p: p.write_bytes(b"garbage" * 200),
+    lambda p: p.mkdir(),
+])
+def test_invalid_db_never_500(tmp_path, make_bad):
+    path = tmp_path / "bad.db"
+    make_bad(path)
+    c = make_client(path)
+    r = get(c)
+    assert r.status_code == 200 and "No sync yet" in r.text
+    assert get(c, "/status.json").status_code == 200
+    assert c.get("/healthz").status_code == 503
+
+
+def test_recreated_db_with_same_snapshot_id_is_reloaded(tmp_path):
+    generate_db(tmp_path / "r.db", vms=80, now=NOW)
+    c = make_client(tmp_path / "r.db")
+    first = get(c).text
+    generate_db(tmp_path / "r.db", vms=20, now=NOW)  # same snapshot_id 12, different data
+    second = get(c).text
+    assert "80 VMs · grouped" in first
+    assert "20 VMs · grouped" in second
+    snap = lambda t: t.split('data-snapshot="')[1].split('"')[0]  # noqa: E731
+    assert snap(first) != snap(second)
+
+
+def test_unicode_digit_names_render(tmp_path):
+    conn = connect_rw(tmp_path / "u.db")
+    rid = start_run(conn, now=NOW)
+    finish_run(conn, rid, "success", now=NOW)
+    write_snapshot(conn, make_inventory(vms=[make_vm("web1²"), make_vm("srv-01①")]), rid, 15)
+    conn.close()
+    assert get(make_client(tmp_path / "u.db")).status_code == 200

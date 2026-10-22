@@ -224,3 +224,27 @@ def test_badge_none():
 def test_badge_failed_without_snapshot():
     b = badge(SyncStatus(None, run("failed", NOW, NOW, "Boom"), None, 15, "", ""), NOW)
     assert (b.state, b.line2) == ("failed", "No data yet")
+
+
+def test_natural_key_unicode_digits_do_not_crash():
+    assert sorted(["web10", "web1²", "srv-01①", "web2"], key=natural_key) == ["srv-01①", "web1²", "web2", "web10"]
+    inv = make_inventory(vms=[make_vm("web1²"), make_vm("web1")])
+    assert [r.vm.name for r in build_groups(inv, "host", NOW)[0].rows] == ["web1", "web1²"]
+
+
+def test_badge_running_too_long_is_stale():
+    b = badge(status(run("running", NOW + timedelta(minutes=15)), NOW), NOW + timedelta(days=2))
+    assert b.state == "stale"
+    assert b.line1 == "Data is 2880 min old"
+
+
+def test_badge_failed_days_later_shows_date():
+    later = NOW + timedelta(days=2)
+    b = badge(status(run("failed", later - timedelta(minutes=1), later, "Boom"), NOW), later)
+    assert b.line1 == "Sync failed 12:00"
+    assert b.line2 == "Showing data from 22.10.2026 12:00"
+
+
+def test_badge_stale_other_day_shows_date():
+    b = badge(status(run("success", NOW, NOW), NOW), NOW + timedelta(days=1))
+    assert b.line2 == "Last sync 22.10.2026 12:00 · expected every 15 min"

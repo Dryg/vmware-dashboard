@@ -99,25 +99,30 @@ def create_app(settings: WebSettings, now: Callable[[], datetime] = lambda: date
                                 headers={"WWW-Authenticate": 'Basic realm="vmdash"'})
 
     # A snapshot never changes after it is written, so the parsed inventory is reused until a new one appears.
-    cache: dict[str, object] = {"snapshot_id": None, "inv": EMPTY_INVENTORY}
+    # (uid, inventory) is replaced as one tuple so concurrent requests never see a mismatched pair.
+    cache: list[tuple[str | None, Inventory]] = [(None, EMPTY_INVENTORY)]
 
     def load(with_inventory: bool) -> tuple[Inventory, SyncStatus]:
-        conn = connect_ro(settings.sqlite_path)
-        if conn is None:
-            return EMPTY_INVENTORY, EMPTY_STATUS
+        conn = None
         try:
+            conn = connect_ro(settings.sqlite_path)
+            if conn is None:
+                return EMPTY_INVENTORY, EMPTY_STATUS
             conn.execute("BEGIN")  # one consistent read of status + inventory
             st = read_status(conn)
             if not with_inventory or st.snapshot_id is None:
                 return EMPTY_INVENTORY, st
-            if cache["snapshot_id"] != st.snapshot_id:
-                cache["inv"], cache["snapshot_id"] = read_inventory(conn), st.snapshot_id
-            return cache["inv"], st
+            uid, inv = cache[0]
+            if uid is None or uid != st.snapshot_uid:
+                inv = read_inventory(conn)
+                cache[0] = (st.snapshot_uid, inv)
+            return inv, st
         except sqlite3.Error:
             log.exception("could not read %s", settings.sqlite_path)
             return EMPTY_INVENTORY, EMPTY_STATUS
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
     def index(request: Request, group: str = "host"):
@@ -139,6 +144,7 @@ def create_app(settings: WebSettings, now: Callable[[], datetime] = lambda: date
         run = st.last_run
         return {
             "snapshot_id": st.snapshot_id,
+            "snapshot_uid": st.snapshot_uid,
             "last_run": {"status": run.status, "started_at": _iso(run.started_at),
                          "finished_at": _iso(run.finished_at), "error": run.error} if run else None,
             "last_success_at": _iso(st.last_success_at),

@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="{{ static_url('style.css') }}">
 <script src="{{ static_url('app.js') }}" defer></script>
 </head>
-<body data-snapshot="{{ status.snapshot_id or '' }}" data-group="{{ group }}">
+<body data-snapshot="{{ status.snapshot_uid or '' }}" data-group="{{ group }}">
 <header class="top">
  <div class="r1 gut">
   <div class="brand"><strong>vmdash</strong><span>{{ status.vcenter_host }}{{ ' · ' ~ status.datacenter if status.datacenter }}</span></div>

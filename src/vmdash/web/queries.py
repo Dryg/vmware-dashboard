@@ -27,6 +27,7 @@ class SyncStatus:
     interval_minutes: int
     vcenter_host: str
     datacenter: str
+    snapshot_uid: str | None = None  # unique per written snapshot, unlike ids which restart with a new DB
 
 
 EMPTY_STATUS = SyncStatus(None, None, None, DEFAULT_INTERVAL, "", "")
@@ -81,4 +82,5 @@ def read_status(conn: sqlite3.Connection) -> SyncStatus:
         interval_minutes=int(meta.get("sync_interval_minutes", DEFAULT_INTERVAL)),
         vcenter_host=meta.get("vcenter_host", ""),
         datacenter=meta.get("datacenter", ""),
+        snapshot_uid=meta.get("snapshot_uid"),
     )

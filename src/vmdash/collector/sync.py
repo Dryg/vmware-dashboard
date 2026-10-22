@@ -5,6 +5,8 @@ import sqlite3
 import time
 from collections.abc import Callable
 
+from pyVmomi import vmodl
+
 from vmdash.collector.tags import fetch_vm_tags
 from vmdash.collector.transform import RawInventory, build_inventory
 from vmdash.collector.vcenter import connect, disconnect, fetch_raw
@@ -31,7 +33,11 @@ def fetch_tags_for(settings: CollectorSettings) -> dict[str, list[Tag]]:
 
 
 def _error(e: BaseException, settings: CollectorSettings) -> str:
-    text = f"{type(e).__name__}: {e}".strip()
+    if isinstance(e, vmodl.MethodFault):  # str() of a vSphere fault is a multi-line object dump
+        text = f"{type(e).__name__}: {e.msg or ''}"
+    else:
+        text = f"{type(e).__name__}: {e}"
+    text = " ".join(text.split())
     password = settings.vcenter_password.get_secret_value()
     if password:
         text = text.replace(password, "***")

@@ -42,6 +42,12 @@ def fmt_datetime(dt: datetime) -> str:
     return dt.astimezone().strftime("%d.%m.%Y %H:%M")
 
 
+def fmt_when(dt: datetime, now: datetime) -> str:
+    """HH:MM for today, full date otherwise."""
+    local = dt.astimezone()
+    return fmt_time(dt) if local.date() == now.astimezone().date() else fmt_datetime(dt)
+
+
 def pct(part: int, whole: int) -> int:
     return round(part * 100 / whole) if whole else 0
 
@@ -49,7 +55,9 @@ def pct(part: int, whole: int) -> int:
 # ---------- per-VM facts ----------
 
 def natural_key(s: str) -> tuple:
-    return tuple(int(p) if p.isdigit() else p for p in re.split(r"(\d+)", s.casefold()))
+    # re.split with a capture group puts the digit runs at odd positions; str.isdigit() would also accept
+    # characters like "²" that int() rejects.
+    return tuple(int(p) if i % 2 else p for i, p in enumerate(re.split(r"([0-9]+)", s.casefold())))
 
 
 def display_status(vm: Vm) -> str:
@@ -240,23 +248,24 @@ class Badge:
 
 def badge(st: SyncStatus, now: datetime) -> Badge:
     run, ok_at = st.last_run, st.last_success_at
-    data_from = f"Showing data from {fmt_time(ok_at)}" if st.snapshot_id and ok_at else "No data yet"
-    if run and run.status == "running":
-        return Badge("running", f"Syncing… started {fmt_time(run.started_at)}", data_from, None)
+    has_data = bool(st.snapshot_id and ok_at)
+    data_from = f"Showing data from {fmt_when(ok_at, now)}" if has_data else "No data yet"
+    too_old = has_data and now - ok_at > timedelta(minutes=3 * st.interval_minutes)
     if run and run.status == "failed":
         at = run.finished_at or run.started_at
         error = (run.error or "unknown error").rstrip(". ")
-        tail = f" {data_from}." if ok_at and st.snapshot_id else ""
-        return Badge("failed", f"Sync failed {fmt_time(at)}", data_from,
+        tail = f" {data_from}." if has_data else ""
+        return Badge("failed", f"Sync failed {fmt_when(at, now)}", data_from,
                      f"Last sync failed at {fmt_datetime(at)}: {error}.{tail}")
-    if not st.snapshot_id or not ok_at:
+    if run and run.status == "running" and not too_old:
+        return Badge("running", f"Syncing… started {fmt_when(run.started_at, now)}", data_from, None)
+    if not has_data:
         return Badge("none", "No sync yet", "Waiting for the collector", None)
-    age = now - ok_at
-    if age > timedelta(minutes=3 * st.interval_minutes):
-        mins = int(age / timedelta(minutes=1))
+    if too_old:  # also covers a sync that has been "running" far too long (hung collector)
+        mins = int((now - ok_at) / timedelta(minutes=1))
         return Badge(
             "stale", f"Data is {mins} min old",
-            f"Last sync {fmt_time(ok_at)} · expected every {st.interval_minutes} min",
+            f"Last sync {fmt_when(ok_at, now)} · expected every {st.interval_minutes} min",
             f"No successful sync for {mins} minutes (expected every {st.interval_minutes}). "
             "Check the collector: systemctl status vmdash-collector",
         )

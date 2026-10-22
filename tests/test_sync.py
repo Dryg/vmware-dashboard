@@ -94,3 +94,20 @@ def test_error_truncated(conn, settings):
         raise RuntimeError("x" * 2000)
     run_sync(settings, conn, fetch=long, fetch_tags=no_tags)
     assert len(last_run(conn)["error"]) == 500
+
+
+def test_vmodl_fault_error_is_one_line_message(conn, settings):
+    from pyVmomi import vim
+
+    def bad_login(_s):
+        raise vim.fault.InvalidLogin(msg="Cannot complete login due to an incorrect user name or password.")
+    run_sync(settings, conn, fetch=bad_login, fetch_tags=no_tags)
+    assert last_run(conn)["error"] == (
+        "vim.fault.InvalidLogin: Cannot complete login due to an incorrect user name or password.")
+
+
+def test_multiline_error_collapsed(conn, settings):
+    def multi(_s):
+        raise RuntimeError("line one\n   line two\n")
+    run_sync(settings, conn, fetch=multi, fetch_tags=no_tags)
+    assert last_run(conn)["error"] == "RuntimeError: line one line two"

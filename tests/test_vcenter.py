@@ -51,3 +51,36 @@ def test_plain_converts_managed_objects_to_moref():
 def test_host_port():
     assert host_port("vcsa01.lab.local") == ("vcsa01.lab.local", 443)
     assert host_port("localhost:8989") == ("localhost", 8989)
+
+
+def test_connect_sets_socket_timeout(monkeypatch):
+    from vmdash.collector import vcenter
+    from vmdash.config import CollectorSettings
+    seen = {}
+    monkeypatch.setattr(vcenter, "SmartConnect", lambda **kw: seen.update(kw) or "si")
+    s = CollectorSettings(vcenter_host="vc:8443", vcenter_user="u", vcenter_password="p", _env_file=None)
+    assert vcenter.connect(s) == "si"
+    assert seen["httpConnectionTimeout"] == vcenter.CONNECT_TIMEOUT_S
+    assert (seen["host"], seen["port"]) == ("vc", 8443)
+
+
+def test_find_datacenter_searches_nested_folders(monkeypatch):
+    from types import SimpleNamespace
+
+    from vmdash.collector import vcenter
+    root = object()
+    si = SimpleNamespace(_stub=None, RetrieveContent=lambda: SimpleNamespace(rootFolder=root))
+    calls = []
+
+    def fake_collect(si_, root_, obj_type, paths, extra=None):
+        calls.append((root_, obj_type))
+        return {"datacenter-3": {"name": "DC1", "vmFolder": "group-v4"},
+                "datacenter-9": {"name": "DC2", "vmFolder": "group-v9"}}
+    monkeypatch.setattr(vcenter, "_collect", fake_collect)
+    dc, found = vcenter.find_datacenter(si, "DC2")
+    assert dc._moId == "datacenter-9"
+    assert found == {"datacenter-9": {"name": "DC2", "vmFolder": "group-v9"}}
+    assert calls == [(root, vim.Datacenter)]
+    import pytest
+    with pytest.raises(ValueError, match="Datacenter not found: Nope"):
+        vcenter.find_datacenter(si, "Nope")

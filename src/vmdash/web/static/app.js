@@ -92,7 +92,7 @@
 
   doc.addEventListener("keydown", (e) => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(doc.activeElement.tagName);
-    if ((e.key === "/" && !typing) || (e.key.toLowerCase() === "k" && (e.ctrlKey || e.metaKey))) {
+    if ((e.key === "/" && !typing) || ((e.key || "").toLowerCase() === "k" && (e.ctrlKey || e.metaKey))) {
       e.preventDefault(); q.focus(); q.select();
     } else if (e.key === "Escape" && doc.activeElement === q) {
       q.value = ""; q.blur(); apply();
@@ -148,7 +148,7 @@
       const r = await fetch("status.json", { cache: "no-store", credentials: "same-origin" });
       if (!r.ok) return;
       const s = await r.json();
-      if (String(s.snapshot_id ?? "") !== snapshot) {
+      if (String(s.snapshot_uid ?? "") !== snapshot) {
         put(sessionStorage, "vmdash.q", q.value);
         location.reload();
         return;

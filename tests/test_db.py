@@ -49,6 +49,7 @@ def test_snapshot_meta(conn):
     rid = start_run(conn)
     write_snapshot(conn, make_inventory(), rid, 15)
     meta = dict(conn.execute("select key, value from meta").fetchall())
+    assert len(meta.pop("snapshot_uid")) == 32
     assert meta == {"vcenter_host": "vcsa01.lab.local", "datacenter": "DC-Main",
                     "sync_interval_minutes": "15", "snapshot_id": str(rid)}
 
@@ -113,3 +114,27 @@ def test_connect_ro_cannot_write(tmp_path):
     assert ro is not None
     with pytest.raises(sqlite3.OperationalError):
         ro.execute("insert into meta values ('a', 'b')")
+
+
+def test_connect_ro_garbage_file_returns_none(tmp_path):
+    (tmp_path / "junk.db").write_bytes(b"this is not sqlite" * 100)
+    assert connect_ro(tmp_path / "junk.db") is None
+
+
+def test_connect_ro_directory_returns_none(tmp_path):
+    assert connect_ro(tmp_path) is None
+
+
+def test_connect_ro_path_with_special_characters(tmp_path):
+    path = tmp_path / "we#ird%dir" / "f.db"
+    connect_rw(path).close()
+    assert connect_ro(path) is not None
+    assert not (tmp_path / "we").exists()
+
+
+def test_snapshot_uid_changes_every_write(conn):
+    rid = start_run(conn)
+    write_snapshot(conn, make_inventory(), rid, 15)
+    first = conn.execute("select value from meta where key='snapshot_uid'").fetchone()[0]
+    write_snapshot(conn, make_inventory(), rid, 15)
+    assert conn.execute("select value from meta where key='snapshot_uid'").fetchone()[0] != first

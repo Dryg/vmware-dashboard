@@ -17,13 +17,19 @@ on the vCenter root object, propagated to children. Tags are read through the sa
 ```bash
 sudo useradd --system --home /opt/vmdash --shell /usr/sbin/nologin vmdash
 sudo mkdir -p /opt/vmdash /etc/vmdash
-sudo cp -r . /opt/vmdash            # run from a checkout of this repository
+sudo install -d -o vmdash -g vmdash -m 750 /var/lib/vmdash
+
+# From a checkout of this repository. `git archive` copies only tracked files,
+# so no local .env, .venv or *.db ends up on the server.
+git archive HEAD | sudo tar -x -C /opt/vmdash
 sudo chown -R vmdash:vmdash /opt/vmdash
 
 # Everything (virtualenv, Python if uv downloads one, cache) stays under /opt/vmdash,
-# so the services work with ProtectHome=yes.
+# so the services work with ProtectHome=yes. The full path to uv is used because
+# sudo's secure_path often does not include ~/.local/bin.
+UV=$(command -v uv)
 sudo -u vmdash env UV_CACHE_DIR=/opt/vmdash/.uv-cache UV_PYTHON_INSTALL_DIR=/opt/vmdash/.python \
-    uv sync --frozen --no-dev --directory /opt/vmdash
+    "$UV" sync --frozen --no-dev --directory /opt/vmdash
 ```
 
 ## 3. Configure
@@ -32,6 +38,9 @@ sudo -u vmdash env UV_CACHE_DIR=/opt/vmdash/.uv-cache UV_PYTHON_INSTALL_DIR=/opt
 sudo install -m 600 -o vmdash -g vmdash /opt/vmdash/.env.example /etc/vmdash/vmdash.env
 sudo -e /etc/vmdash/vmdash.env
 ```
+
+Do not leave a `.env` file in `/opt/vmdash`: the services run there and would read it for any
+setting missing from `/etc/vmdash/vmdash.env`.
 
 Set at least:
 
@@ -50,7 +59,7 @@ Basic auth sends the password with every request. Use TLS: either set `WEB_SSL_C
 ## 4. Test one sync
 
 ```bash
-sudo -u vmdash sh -c 'set -a; . /etc/vmdash/vmdash.env; set +a; /opt/vmdash/.venv/bin/vmdash-collector --once'
+sudo -u vmdash /opt/vmdash/.venv/bin/vmdash-collector --once --env-file /etc/vmdash/vmdash.env
 ```
 
 Exit code 0 means the snapshot was written (`partial` = VMs written but tags failed; the log says why).
@@ -77,9 +86,10 @@ curl -s http://localhost:8080/healthz      # {"ok":true,"last_success_age_s":42}
 
 ```bash
 sudo systemctl stop vmdash-web vmdash-collector
-# copy the new code to /opt/vmdash, then:
+git archive HEAD | sudo tar -x -C /opt/vmdash      # from the updated checkout
+sudo chown -R vmdash:vmdash /opt/vmdash
 sudo -u vmdash env UV_CACHE_DIR=/opt/vmdash/.uv-cache UV_PYTHON_INSTALL_DIR=/opt/vmdash/.python \
-    uv sync --frozen --no-dev --directory /opt/vmdash
+    "$(command -v uv)" sync --frozen --no-dev --directory /opt/vmdash
 sudo systemctl start vmdash-collector vmdash-web
 ```
 
