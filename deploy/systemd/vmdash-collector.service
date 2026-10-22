@@ -1,0 +1,24 @@
+[Unit]
+Description=vmdash collector (vCenter inventory -> SQLite)
+Documentation=file:///opt/vmdash/deploy/INSTALL.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=vmdash
+Group=vmdash
+WorkingDirectory=/opt/vmdash
+EnvironmentFile=/etc/vmdash/vmdash.env
+ExecStart=/opt/vmdash/.venv/bin/vmdash-collector
+Restart=on-failure
+RestartSec=10
+StateDirectory=vmdash
+ReadWritePaths=/var/lib/vmdash
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
