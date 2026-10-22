@@ -1,0 +1,40 @@
+[project]
+name = "vmdash"
+version = "0.1.0"
+description = "Read-only vSphere inventory dashboard: collector daemon + fast web page over SQLite"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "jinja2>=3.1",
+    "pydantic-settings>=2.6",
+    "pyvmomi>=8.0.3",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+vmdash-collector = "vmdash.collector.main:main"
+vmdash-web = "vmdash.web.app:main"
+vmdash-mockdb = "vmdash.mock.generate:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.7"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vmdash"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
