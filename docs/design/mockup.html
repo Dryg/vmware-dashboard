@@ -1,0 +1,321 @@
+<title>vmdash Mockup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: sticky two-row header (search + sync badge / group-by + toggles + count),
+   one-line summary, then one wide table where each group is a collapsible row group. */
+:root{
+  --bg:#f4f6f8; --surface:#ffffff; --host:#e9edf2; --fg:#161a1f; --muted:#5d6775; --line:#dce1e7;
+  --accent:#2b6896; --ok:#1c7f47; --warn:#a46710; --bad:#b8372a; --off:#8d96a2; --hl:#f3d36b;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+/* light is the default; dark only when the user picks it (stored in localStorage) */
+:root[data-theme="dark"]{
+  --bg:#0e1115; --surface:#151a20; --host:#1c222a; --fg:#e3e7ec; --muted:#8e98a6; --line:#29303a;
+  --accent:#6da8d5; --ok:#46b876; --warn:#d9a14a; --bad:#ec6c5e; --off:#6b7581; --hl:#7a6420; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:14px/1.4 var(--font)}
+.gut{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.num,.dc,.du,.tc,.htot,.count{font-variant-numeric:tabular-nums}
+mark{background:var(--hl);color:inherit;border-radius:2px;padding:0 1px}
+
+/* header */
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
+.r1{padding-block:10px;display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center}
+.r2{padding-block:0 10px;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font-size:13px}
+.brand{display:flex;align-items:baseline;gap:10px}
+.brand strong{font-size:16px;letter-spacing:-.01em}
+.brand span{color:var(--muted);font-size:12.5px;white-space:nowrap}
+.search{flex:1 1 300px;max-width:600px;position:relative;display:flex;align-items:center}
+.search svg{position:absolute;left:10px;width:15px;height:15px;color:var(--muted);pointer-events:none}
+#q{width:100%;font:inherit;font-size:14.5px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 40px 7px 32px}
+#q:focus-visible{outline:2px solid var(--accent);outline-offset:-1px;background:var(--surface)}
+.kbd{position:absolute;right:8px;font:11px var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 5px;pointer-events:none}
+.sync{margin-left:auto;display:flex;gap:9px;align-items:center}
+.sync .l1{font-weight:600;font-size:13px}
+.sync .l2{color:var(--muted);font-size:12px}
+.theme{font:inherit;display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--muted);cursor:pointer}
+.theme:hover{color:var(--fg)}
+.theme svg{width:16px;height:16px}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--off)}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.bad{background:var(--bad)}
+
+.lbl{color:var(--muted)}
+.seg{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.seg button,.lnk{font:inherit;color:var(--muted);background:none;border:1px solid var(--line);border-radius:4px;padding:2px 9px;cursor:pointer}
+.seg button:hover,.lnk:hover{color:var(--fg)}
+.seg button[aria-pressed="true"]{color:var(--accent);border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--surface));font-weight:600}
+.lnk{border-color:transparent;padding:2px 4px;color:var(--accent)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tgl{display:flex;gap:6px;align-items:center;color:var(--muted);cursor:pointer;user-select:none}
+.tgl input{accent-color:var(--accent);margin:0}
+.count{margin-left:auto;color:var(--muted)}
+.count b{color:var(--fg)}
+
+.summary{padding-block:10px;color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:4px 16px}
+.summary b{color:var(--fg);font-weight:600}
+
+/* table */
+main{padding-block:0 18px}
+.tw{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:6px}
+table{width:100%;min-width:1120px;border-collapse:collapse}
+thead th{text-align:left;font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+  padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th.num,td.num{text-align:right}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody:last-child tr:last-child td{border-bottom:0}
+
+.grow th{padding:0;background:var(--host);border-bottom:1px solid var(--line)}
+.gbtn{all:unset;box-sizing:border-box;width:100%;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:8px 12px;cursor:pointer}
+.gbtn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.caret{display:inline-block;width:10px;color:var(--muted);transition:transform .12s}
+.collapsed .caret{transform:rotate(-90deg)}
+.collapsed tr.vm{display:none}
+.gname{font-weight:650}
+.chip{font-size:12px;color:var(--muted);border:1px solid var(--line);background:var(--surface);border-radius:3px;padding:0 6px}
+.hs{font-size:12px;display:inline-flex;gap:5px;align-items:center;color:var(--muted)}
+.dsu{display:inline-flex;gap:8px;align-items:center;font-size:12px;color:var(--muted)}
+.dsu .bar{width:70px}
+.htot{margin-left:auto;font-size:12.5px;color:var(--muted)}
+
+.c-vm{min-width:300px;max-width:460px}
+.vn{display:flex;gap:8px;align-items:baseline;min-width:0}
+.vname{font-weight:600;white-space:nowrap}
+.vn .ds{color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.vmeta{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;margin-top:3px;font-size:12px;color:var(--muted)}
+.fd{font-family:var(--mono);font-size:11.5px}
+.tag{font-size:11.5px;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:0 5px;white-space:nowrap}
+.tag i{font-style:normal;color:var(--muted)}
+.tag i::after{content:": "}
+.hc{white-space:nowrap}
+.sub{font-size:12px;color:var(--muted);white-space:nowrap}
+
+.st{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.st::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--off)}
+.st.ok::before{background:var(--ok)} .st.warn::before{background:var(--warn)} .st.bad::before{background:var(--bad)}
+.st.tpl::before{border-radius:1px;background:none;border:1.5px solid var(--muted)}
+.st.off{color:var(--muted)}
+
+.loc{font-family:var(--mono);font-size:12px;white-space:nowrap}
+.dk{display:grid;grid-template-columns:48px 62px 54px auto;gap:8px;align-items:center;font-size:12.5px;line-height:1.7}
+.dl{color:var(--muted)}
+.dc{text-align:right}
+.du{color:var(--muted);white-space:nowrap}
+.bar{display:block;height:4px;border-radius:2px;background:var(--line);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.bar.hi i{background:var(--warn)}
+.tc{font-weight:600;text-align:right}
+.tu{display:flex;gap:8px;align-items:center;justify-content:flex-end;font-size:12.5px}
+.tu .bar{width:54px}
+.empty td{padding:28px 12px;text-align:center;color:var(--muted)}
+
+footer{padding-block:4px 24px;color:var(--muted);font-size:12px}
+@media (prefers-reduced-motion: reduce){.caret{transition:none}}
+</style>
+
+<header class="top">
+  <div class="r1 gut">
+    <div class="brand"><strong>vmdash</strong><span>vcsa01.lab.local · DC-Main</span></div>
+    <div class="search">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="m11 11 3.5 3.5"/></svg>
+      <input id="q" type="search" placeholder="Search everything: name, tag, folder, OS, host, datastore, status…" aria-label="Search VMs" autocomplete="off" spellcheck="false">
+      <span class="kbd" id="kbd">/</span>
+    </div>
+    <div class="sync"><span class="dot ok"></span><div><div class="l1">Synced 22.10.2026 14:05</div><div class="l2">Next sync about 14:20 · page updates itself</div></div></div>
+    <button type="button" class="theme" id="theme"></button>
+  </div>
+  <div class="r2 gut">
+    <span class="lbl">Group by</span>
+    <div class="seg" id="seg" role="group" aria-label="Group by"></div>
+    <label class="tgl"><input id="tpl" type="checkbox"> Show templates</label>
+    <button type="button" class="lnk" id="fold">Collapse all</button>
+    <span class="count" id="count" aria-live="polite"></span>
+  </div>
+</header>
+<div id="summary" class="summary gut"></div>
+
+<main class="gut">
+  <div class="tw"><table id="t"><thead><tr id="th"></tr></thead></table></div>
+</main>
+<footer class="gut" id="foot"></footer>
+
+<script>
+const HOSTS = {
+  'esx01.lab.local':{c:'Cluster-A', s:'connected'},
+  'esx02.lab.local':{c:'Cluster-A', s:'connected'},
+  'esx03.lab.local':{c:'Cluster-A', s:'maintenance'},
+  'esx04.lab.local':{c:'Cluster-B', s:'disconnected'},
+  'esx10.lab.local':{c:'Cluster-B', s:'connected'},
+};
+// datastore: [capacity GB, used GB]
+const DS = {'ds-ssd01':[2048,1130],'ds-ssd02':[2048,1650],'ds-ssd03':[2048,910],'ds-hdd01':[4096,1240],'ds-hdd02':[4096,3720]};
+const W22='Windows Server 2022', W19='Windows Server 2019', W12='Windows Server 2012 R2', U24='Ubuntu 24.04 LTS', U22='Ubuntu 22.04 LTS', D12='Debian 12', R9='Rocky Linux 9';
+// host, name, description, folder, tags, power, vCPU, RAM GB, datastore, disks [[provisioned GB, used GB]], guest OS, uptime days
+const V = [
+  ['esx10.lab.local','dc01','Active Directory domain controller','Infra/Identity',['env:prod','backup:daily'],'on',2,8,'ds-ssd03',[[80,38]],W22,41],
+  ['esx10.lab.local','dc02','Active Directory domain controller','Infra/Identity',['env:prod','backup:daily'],'on',2,8,'ds-ssd03',[[80,36]],W22,41],
+  ['esx10.lab.local','mon01','Prometheus + Grafana','Infra/Monitoring',['env:prod','team:platform'],'on',4,16,'ds-ssd03',[[40,19],[500,284]],U24,12],
+  ['esx10.lab.local','files01','SMB file share for departments','Production/Files',['env:prod','backup:daily'],'on',4,16,'ds-hdd02',[[60,27],[2048,1790]],W19,97],
+  ['esx10.lab.local','vpn01','WireGuard gateway','Infra',['env:prod'],'on',1,2,'ds-ssd03',[[20,7]],D12,186],
+  ['esx10.lab.local','k8s-node03','Kubernetes worker','Production/K8s',['env:prod','team:platform'],'on',8,32,'ds-ssd03',[[100,46]],U24,15],
+  ['esx01.lab.local','web01','Nginx frontend, public site','Production/Web',['env:prod','owner:ops'],'on',4,16,'ds-ssd01',[[60,31],[200,88]],U24,3.2],
+  ['esx01.lab.local','web02','Nginx frontend, public site','Production/Web',['env:prod','owner:ops'],'on',4,16,'ds-ssd01',[[60,29],[200,91]],U24,3.2],
+  ['esx01.lab.local','db01','PostgreSQL 16 primary','Production/DB',['env:prod','backup:daily'],'on',8,64,'ds-ssd02',[[80,22],[500,441],[100,64]],R9,64],
+  ['esx01.lab.local','jump01','Admin jump host','Infra',['env:prod'],'on',2,4,'ds-ssd01',[[40,18]],D12,0.4],
+  ['esx01.lab.local','k8s-node01','Kubernetes worker','Production/K8s',['env:prod','team:platform'],'on',8,32,'ds-ssd01',[[100,51]],U24,15],
+  ['esx01.lab.local','tpl-ubuntu-24.04','Ubuntu 24.04 LTS base image','Templates',[],'tpl',2,4,'ds-hdd01',[[40,6]],U24,0],
+  ['esx03.lab.local','test01','QA sandbox','Dev/Test',['env:test'],'susp',2,8,'ds-hdd01',[[40,25]],U22,0],
+  ['esx03.lab.local','test02','QA sandbox','Dev/Test',['env:test'],'off',2,8,'ds-hdd01',[[40,14]],U22,0],
+  ['esx03.lab.local','tpl-win2022','Windows Server 2022 Standard, sysprepped','Templates',[],'tpl',4,8,'ds-hdd01',[[90,24]],W22,0],
+  ['esx02.lab.local','app01','Order service (Java 21)','Production/App',['env:prod','team:shop'],'on',6,24,'ds-ssd02',[[60,34],[150,47]],R9,22],
+  ['esx02.lab.local','app02','Order service (Java 21)','Production/App',['env:prod','team:shop'],'on',6,24,'ds-ssd02',[[60,33],[150,52]],R9,22],
+  ['esx02.lab.local','mq01','RabbitMQ broker','Production/App',['env:prod'],'on',2,8,'ds-ssd02',[[40,21],[100,12]],D12,5],
+  ['esx02.lab.local','build01','GitLab runner, Docker executor','Dev/CI',['env:dev','team:platform'],'on',8,32,'ds-hdd01',[[60,40],[300,233]],U22,1.5],
+  ['esx02.lab.local','k8s-node02','Kubernetes worker','Production/K8s',['env:prod','team:platform'],'on',8,32,'ds-ssd02',[[100,49]],U24,15],
+  ['esx02.lab.local','old-crm','Legacy CRM. Decommission after the Q4 migration; do not power on without asking the finance team first.','Archive',['env:legacy'],'off',2,8,'ds-hdd01',[[80,72]],W12,0],
+  ['esx04.lab.local','backup01','Veeam backup proxy','Infra/Backup',['env:prod'],'unk',4,8,'ds-hdd02',[[60,30]],W19,0],
+  [null,'restore-test-0915','Left over after host esx05 was removed','Discovered virtual machine',[],'orph',2,4,'ds-hdd02',[[40,11]],U22,0],
+].map(([h,n,d,f,t,p,cpu,ram,ds,dk,os,up]) => ({h,n,d,f,t,p,cpu,ram,ds,dk,os,up}));
+
+const ST = {on:['Running','ok'],susp:['Suspended','warn'],off:['Shut down','off'],unk:['Unknown','bad'],orph:['Orphaned','bad'],tpl:['Template','tpl']};
+const HS = {connected:['Connected','ok'],maintenance:['Maintenance mode','warn'],disconnected:['Disconnected','bad']};
+const UPB = ['Under 1 day','1–7 days','7–30 days','30–90 days','Over 90 days','Not running'];
+const upb = v => v.p !== 'on' ? 5 : v.up < 1 ? 0 : v.up < 7 ? 1 : v.up < 30 ? 2 : v.up < 90 ? 3 : 4;
+const upTxt = v => v.p !== 'on' ? '' : v.up < 1 ? `up ${Math.round(v.up*24)} h` : `up ${Math.floor(v.up)} d`;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const gb = x => x >= 1024 ? (x/1024).toFixed(1).replace(/\.0$/,'') + ' TB' : Math.round(x) + ' GB';
+const sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
+const coll = new Intl.Collator('en', {numeric:true, sensitivity:'base'});
+const byIdx = list => (a, b) => list.indexOf(a) - list.indexOf(b);
+const last = name => (a, b) => a === name ? 1 : b === name ? -1 : coll.compare(a, b);
+const bar = p => `<span class="bar${p > .85 ? ' hi' : ''}" title="${Math.round(p*100)}% used"><i style="width:${Math.max(3, Math.round(p*100))}%"></i></span>`;
+
+const GROUPS = {
+  host:     {label:'Host',        key:v => v.h || 'No host', order:last('No host'),
+             head:k => { const h = HOSTS[k]; if (!h) return ''; const s = HS[h.s];
+               return `<span class="chip">${hl(h.c)}</span><span class="hs"><span class="dot ${s[1]}"></span>${hl(s[0])}</span>`; }},
+  folder:   {label:'Folder',      key:v => v.f.split('/')[0]},
+  cluster:  {label:'Cluster',     key:v => v.h ? HOSTS[v.h].c : 'No cluster', order:last('No cluster')},
+  datastore:{label:'Datastore',   key:v => v.ds,
+             head:k => { const [c, u] = DS[k]; return `<span class="dsu">${bar(u/c)}${gb(u)} of ${gb(c)} used (${Math.round(u/c*100)}%)</span>`; }},
+  power:    {label:'Power state', key:v => ST[v.p][0], order:byIdx(Object.values(ST).map(x => x[0]))},
+  uptime:   {label:'Uptime',      key:v => UPB[upb(v)], order:byIdx(UPB)},
+  os:       {label:'Guest OS',    key:v => v.os},
+};
+
+// everything visible in a row (and its host group) is searchable
+for (const v of V){
+  const h = HOSTS[v.h] || {};
+  v._h = [v.n, v.d, v.f, v.t.join(' '), ST[v.p][0], upTxt(v), v.os, v.h || 'No host', h.c, h.s && HS[h.s][0],
+    `[${v.ds}] ${v.n}/`, v.cpu + ' vcpu', v.ram + ' gb', v.dk.map(d => gb(d[0]) + ' ' + gb(d[1])).join(' ')].join(' ').toLowerCase();
+}
+
+let group = 'host', RE = null, terms = [];
+try { group = localStorage.getItem('vmdash.group') || 'host'; } catch (e) {}
+if (!GROUPS[group]) group = 'host';
+const collapsed = new Set();
+
+function hl(s){
+  s = String(s ?? ''); if (!RE) return esc(s);
+  let out = '', i = 0;
+  s.replace(RE, (m, off) => { out += esc(s.slice(i, off)) + '<mark>' + esc(m) + '</mark>'; i = off + m.length; return m; });
+  return out + esc(s.slice(i));
+}
+
+function row(v, showHost){
+  const [sl, sc] = ST[v.p], cap = sum(v.dk, x => x[0]), used = sum(v.dk, x => x[1]);
+  const tags = v.t.map(x => { const [k, val] = x.split(':'); return `<span class="tag"><i>${hl(k)}</i>${hl(val)}</span>`; }).join('');
+  return `<tr class="vm">
+    <td class="c-vm"><div class="vn"><span class="vname">${hl(v.n)}</span><span class="ds" title="${esc(v.d)}">${hl(v.d)}</span></div>
+      <div class="vmeta"><span class="fd">${hl(v.f)}</span><span>${hl(v.os)}</span>${tags}</div></td>
+    ${showHost ? `<td class="hc">${hl(v.h || 'No host')}<div class="sub">${hl(v.h ? HOSTS[v.h].c : '')}</div></td>` : ''}
+    <td><span class="st ${sc}">${hl(sl)}</span><div class="sub">${hl(upTxt(v))}</div></td>
+    <td class="num">${hl(v.cpu)}</td><td class="num">${hl(v.ram)}</td>
+    <td class="loc">${hl(`[${v.ds}] ${v.n}/`)}</td>
+    <td>${v.dk.map((x, i) => `<div class="dk"><span class="dl">Disk ${i+1}</span><span class="dc">${hl(gb(x[0]))}</span>${bar(x[1]/x[0])}<span class="du">${hl(gb(x[1]))} used</span></div>`).join('')}</td>
+    <td><div class="tc">${gb(cap)}</div><div class="tu">${bar(used/cap)}<span class="du">${gb(used)}</span></div></td>
+  </tr>`;
+}
+
+function render(){
+  terms = $('q').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  RE = terms.length ? new RegExp(terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi') : null;
+  const showT = $('tpl').checked, g = GROUPS[group], showHost = group !== 'host', cols = showHost ? 8 : 7;
+  const match = v => terms.every(t => v._h.includes(t));
+  const pool = V.filter(v => showT || v.p !== 'tpl');
+  const vis = pool.filter(match);
+  const tplHits = !showT && terms.length ? V.filter(v => v.p === 'tpl' && match(v)).length : 0;
+
+  $('th').innerHTML = `<th>VM</th>${showHost ? '<th>Host</th>' : ''}<th>Status</th><th class="num">vCPU</th><th class="num">RAM GB</th><th>Location</th><th>Disks</th><th class="num">Total</th>`;
+  document.querySelectorAll('#seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.g === group));
+
+  const m = new Map();
+  for (const v of vis){ const k = g.key(v); if (!m.has(k)) m.set(k, []); m.get(k).push(v); }
+  const keys = [...m.keys()].sort(g.order || coll.compare);
+  let html = '';
+  for (const k of keys){
+    const vms = m.get(k).sort((a, b) => coll.compare(a.n, b.n));
+    const c = !terms.length && collapsed.has(group + ':' + k);
+    html += `<tbody class="${c ? 'collapsed' : ''}"><tr class="grow"><th colspan="${cols}" scope="rowgroup">
+      <button type="button" class="gbtn" data-k="${esc(k)}" aria-expanded="${!c}">
+        <span class="caret">▾</span><span class="gname">${hl(k)}</span>${g.head ? g.head(k) : ''}
+        <span class="htot">${vms.length} VM${vms.length > 1 ? 's' : ''} · ${sum(vms, v => v.cpu)} vCPU · ${sum(vms, v => v.ram)} GB RAM · ${gb(sum(vms, v => sum(v.dk, x => x[0])))}</span>
+      </button></th></tr>${vms.map(v => row(v, showHost)).join('')}</tbody>`;
+  }
+  if (!vis.length) html = `<tbody><tr class="empty"><td colspan="${cols}">Nothing matches “${esc($('q').value.trim())}”.${tplHits ? ' Some templates match: turn on Show templates.' : ''}</td></tr></tbody>`;
+  const t = $('t'); t.querySelectorAll('tbody').forEach(b => b.remove()); t.insertAdjacentHTML('beforeend', html);
+
+  $('count').innerHTML = (terms.length ? `<b>${vis.length}</b> of ${pool.length} VMs` : `<b>${pool.length}</b> VMs`) +
+    (tplHits && vis.length ? ` · <button type="button" class="lnk" id="showtpl">${tplHits} more in templates</button>` : '');
+  const cap = sum(vis, v => sum(v.dk, x => x[0])), used = sum(vis, v => sum(v.dk, x => x[1]));
+  $('summary').innerHTML = `<span><b>${new Set(vis.filter(v => v.h).map(v => v.h)).size}</b> hosts</span>
+    <span><b>${vis.length}</b> VMs (${vis.filter(v => v.p === 'on').length} running)</span>
+    <span><b>${sum(vis, v => v.cpu)}</b> vCPU</span><span><b>${sum(vis, v => v.ram)}</b> GB RAM</span>
+    <span><b>${gb(cap)}</b> provisioned, ${gb(used)} used</span>`;
+  $('fold').textContent = keys.every(k => collapsed.has(group + ':' + k)) ? 'Expand all' : 'Collapse all';
+  $('foot').textContent = `vmdash · read from SQLite snapshot #1482 · grouped by ${g.label.toLowerCase()}`;
+}
+
+$('seg').innerHTML = Object.entries(GROUPS).map(([k, g]) => `<button type="button" data-g="${k}">${g.label}</button>`).join('');
+$('seg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  group = b.dataset.g; try { localStorage.setItem('vmdash.group', group); } catch (e) {} render();
+});
+$('q').addEventListener('input', render);
+$('q').addEventListener('focus', () => $('kbd').hidden = true);
+$('q').addEventListener('blur', () => $('kbd').hidden = !!$('q').value);
+$('tpl').addEventListener('change', render);
+$('fold').addEventListener('click', () => {
+  const keys = [...document.querySelectorAll('.gbtn')].map(b => group + ':' + b.dataset.k);
+  const all = keys.every(k => collapsed.has(k));
+  keys.forEach(k => all ? collapsed.delete(k) : collapsed.add(k)); render();
+});
+document.addEventListener('click', e => {
+  if (e.target.id === 'showtpl'){ $('tpl').checked = true; render(); return; }
+  const b = e.target.closest('.gbtn'); if (!b || terms.length) return;
+  const k = group + ':' + b.dataset.k; collapsed.has(k) ? collapsed.delete(k) : collapsed.add(k); render();
+});
+document.addEventListener('keydown', e => {
+  const typing = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
+  if ((e.key === '/' && !typing) || (e.key === 'k' && (e.ctrlKey || e.metaKey))){ e.preventDefault(); $('q').focus(); $('q').select(); }
+  if (e.key === 'Escape' && document.activeElement === $('q')){ $('q').value = ''; render(); $('q').blur(); }
+});
+const SUN = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3 3l1 1M12 12l1 1M3 13l1-1M12 4l1-1"/></svg>';
+const MOON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/></svg>';
+function setTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  const b = $('theme'), label = `Switch to ${t === 'dark' ? 'light' : 'dark'} mode`;
+  b.innerHTML = t === 'dark' ? SUN : MOON; b.title = label; b.setAttribute('aria-label', label);
+}
+let theme = 'light';
+try { theme = localStorage.getItem('vmdash.theme') === 'dark' ? 'dark' : 'light'; } catch (e) {}
+setTheme(theme);
+$('theme').addEventListener('click', () => {
+  theme = theme === 'dark' ? 'light' : 'dark'; setTheme(theme);
+  try { localStorage.setItem('vmdash.theme', theme); } catch (e) {}
+});
+render();
+</script>
