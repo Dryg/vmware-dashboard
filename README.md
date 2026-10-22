@@ -35,7 +35,9 @@ Production install with systemd: [deploy/INSTALL.md](deploy/INSTALL.md).
 ## Page features
 
 - Search box (`/` or `Ctrl+K`): every word must match; searches name, description, folder, tags, OS,
-  status, uptime, host, cluster, datastore, sizes.
+  status, uptime, host, cluster, datastore, sizes, DNS name, network, MAC and IP addresses.
+- Network column: the guest's DNS name and every network adapter with its port group and IPs
+  (IPs and DNS name come from VMware Tools, so they are empty for powered-off VMs or VMs without Tools).
 - Group by host (default), folder, cluster, datastore, power state, uptime or guest OS (`?group=` in the URL).
 - Show templates toggle, collapsible groups, light/dark theme (remembered per browser).
 - The header shows sync status; the page reloads itself when a new snapshot arrives.

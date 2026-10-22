@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from vmdash.db import connect_rw, finish_run, start_run, write_snapshot
-from vmdash.models import Datastore, Disk, Host, Inventory, Tag, Vm
+from vmdash.models import Datastore, Disk, Host, Inventory, Nic, Tag, Vm
 
 GB = 2**30
 TB = 2**40
@@ -34,6 +34,11 @@ ROLES = [
 ]
 ENV_BY_FOLDER = {"Production": "prod", "Infra": "prod", "Dev": "dev", "Archive": "legacy"}
 
+# top-level folder -> port group, IPv4 prefix; DB servers also sit on the backup network
+NETWORKS = {"Production": ("VLAN10-Prod", "10.10"), "Infra": ("VLAN20-Infra", "10.20"),
+            "Dev": ("VLAN30-Dev", "10.30")}
+OTHER_NETWORK, BACKUP_NETWORK = ("VM Network", "192.168"), ("VLAN90-Backup", "10.90")
+
 DATASTORES = [("ds-ssd01", 2 * TB, 0.45), ("ds-ssd02", 2 * TB, 0.22), ("ds-ssd03", 2 * TB, 0.55),
               ("ds-hdd01", 4 * TB, 0.70), ("ds-hdd02", 4 * TB, 0.09)]
 
@@ -52,6 +57,23 @@ def _hosts(n: int) -> list[Host]:
         hosts.append(Host(f"host-{100 + i}", name, "Cluster-A" if i < (n + 1) // 2 else "Cluster-B",
                           state, n >= 2 and i == 1))
     return hosts
+
+
+def _nics(i: int, name: str, folder: str, guest_up: bool, connected: bool = True) -> tuple[Nic, ...]:
+    """Deterministic adapters; IPs only when VMware Tools in a running guest would report them."""
+    nets = [NETWORKS.get(folder.split("/")[0], OTHER_NETWORK)]
+    if name.startswith("db"):
+        nets.append(BACKUP_NETWORK)
+    nics = []
+    for k, (network, prefix) in enumerate(nets):
+        ips: tuple[str, ...] = ()
+        if guest_up and connected:
+            ips = (f"{prefix}.{i // 250}.{i % 250 + 4}",)
+            if name.startswith("web"):
+                ips += (f"fd00:{prefix.split('.')[1]}::{i + 4:x}",)
+        nics.append(Nic(4000 + k, f"Network adapter {k + 1}", network, f"00:50:56:{i >> 8:02x}:{i & 255:02x}:{k:02x}",
+                        connected, ips))
+    return tuple(nics)
 
 
 def generate_inventory(hosts: int = 6, vms: int = 80, seed: int = 42, now: datetime | None = None) -> Inventory:
@@ -89,6 +111,7 @@ def generate_inventory(hosts: int = 6, vms: int = 80, seed: int = 42, now: datet
         if power == "poweredOn":
             boot = now - (boot_age if boot_age is not None else timedelta(hours=rng.uniform(2, 200 * 24)))
         ds = rng.choice(ds_names[:3]) if folder.startswith("Production") else rng.choice(ds_names)
+        guest_up = power == "poweredOn" and conn == "connected"
         all_tags = list(tags)
         env = ENV_BY_FOLDER.get(folder.split("/")[0])
         if folder == "Dev/Test":
@@ -99,7 +122,9 @@ def generate_inventory(hosts: int = 6, vms: int = 80, seed: int = 42, now: datet
             moref=f"vm-{1000 + i}", name=name, host_moref=host.moref if host else None, description=desc,
             folder_path=folder, power_state=power, connection_state=conn, is_template=template,
             vcpu=cpu, memory_mb=ram * 1024, guest_os=os_, boot_time=boot, datastore_path=f"[{ds}] {name}/",
+            dns_name=f"{name}.lab.local" if guest_up else "",
             disks=disks([rng.choice([40, 60, 80, 100])] + sizes, ds),
+            nics=_nics(i, name, folder, guest_up, connected=name != "old-crm"),
             tags=tuple(Tag(c, v) for c, v in sorted(all_tags)),
         )
 

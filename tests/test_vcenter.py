@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from pyVmomi import vim
 
-from vmdash.collector.vcenter import host_port, plain, to_disks, to_layout
+from vmdash.collector.vcenter import host_port, plain, to_devices, to_disks, to_guest_nics, to_layout, to_nics
 
 GB = 2**30
 
@@ -26,6 +26,39 @@ def test_to_disks_rdm_without_datastore():
                                   backing=vim.vm.device.VirtualDisk.RawDiskMappingVer1BackingInfo(fileName="[ds1] a/rdm.vmdk"))
     assert to_disks([d])[0]["datastore"] is None
     assert to_disks(None) == []
+
+
+def eth(key, mac, backing, connected=True):
+    return vim.vm.device.VirtualVmxnet3(
+        key=key, macAddress=mac, backing=backing, deviceInfo=vim.Description(label=f"Network adapter {key - 3999}"),
+        connectable=vim.vm.device.VirtualDevice.ConnectInfo(connected=connected))
+
+
+def test_to_nics_standard_and_distributed_port_groups():
+    std = vim.vm.device.VirtualEthernetCard.NetworkBackingInfo(deviceName="VM Network", network=vim.Network("network-7"))
+    dvs = vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo(
+        port=vim.dvs.PortConnection(portgroupKey="dvportgroup-11", switchUuid="x"))
+    devices = [eth(4000, "00:50:56:aa:00:01", std), eth(4001, "00:50:56:aa:00:02", dvs, connected=False),
+               disk(2000, "Hard disk 1", GB, "[ds1] a/a.vmdk", "datastore-1")]
+    assert to_nics(devices) == [
+        {"key": 4000, "label": "Network adapter 1", "mac": "00:50:56:aa:00:01", "connected": True,
+         "network": "network-7", "network_name": "VM Network"},
+        {"key": 4001, "label": "Network adapter 2", "mac": "00:50:56:aa:00:02", "connected": False,
+         "network": "dvportgroup-11", "network_name": ""},
+    ]
+    assert [d["key"] for d in to_devices(devices)["disks"]] == [2000]
+    assert to_nics(None) == []
+
+
+def test_to_guest_nics():
+    guest = [vim.vm.GuestInfo.NicInfo(deviceConfigId=4000, network="VM Network", macAddress="00:50:56:aa:00:01",
+                                      ipAddress=["10.0.0.5", "fe80::1"], connected=True),
+             vim.vm.GuestInfo.NicInfo(deviceConfigId=-1, connected=True)]
+    assert to_guest_nics(guest) == [
+        {"device_key": 4000, "network": "VM Network", "mac": "00:50:56:aa:00:01", "ips": ["10.0.0.5", "fe80::1"]},
+        {"device_key": -1, "network": "", "mac": "", "ips": []},
+    ]
+    assert to_guest_nics(None) == []
 
 
 def test_to_layout_maps_files_and_chains():

@@ -4,14 +4,17 @@ from factories import NOW, make_host, make_inventory, make_vm
 
 from vmdash.db import connect_ro, connect_rw, finish_run, start_run, write_snapshot
 from vmdash.mock.generate import generate_db
-from vmdash.models import Tag
+from vmdash.models import Nic, Tag
 from vmdash.web.queries import read_inventory, read_status
 
 
 def test_read_inventory_round_trip(tmp_path):
     inv = make_inventory(
         hosts=[make_host("a"), make_host("b", cluster=None, in_maintenance=True)],
-        vms=[make_vm("x", tags=(Tag("env", "prod"), Tag("team", "web"))), make_vm("y", host_moref=None, boot_time=None)],
+        vms=[make_vm("x", tags=(Tag("env", "prod"), Tag("team", "web")), dns_name="x.lab.local",
+                     nics=(Nic(4000, "Network adapter 1", "VLAN10", "00:50:56:00:00:01", True, ("10.0.0.1", "fd00::1")),
+                           Nic(4001, "Network adapter 2", "", "", False))),
+             make_vm("y", host_moref=None, boot_time=None)],
     )
     conn = connect_rw(tmp_path / "a.db")
     write_snapshot(conn, inv, start_run(conn), 15)

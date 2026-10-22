@@ -47,8 +47,8 @@
 <main class="gut">
 <div class="tw">
 <table id="t">
-<thead><tr><th>VM</th>{% if show_host %}<th>Host</th>{% endif %}<th>Status</th><th class="num">vCPU</th><th class="num">RAM GB</th><th>Location</th><th>Disks</th><th class="num">Total</th></tr></thead>
-{%- set cols = 8 if show_host else 7 %}
+<thead><tr><th>VM</th>{% if show_host %}<th>Host</th>{% endif %}<th>Status</th><th>Network</th><th class="num">vCPU</th><th class="num">RAM GB</th><th>Location</th><th>Disks</th><th class="num">Total</th></tr></thead>
+{%- set cols = 9 if show_host else 8 %}
 {%- for g in groups %}
 <tbody class="grp" data-key="{{ g.key }}">
 <tr class="grow"><th colspan="{{ cols }}" scope="rowgroup"><button type="button" class="gbtn" aria-expanded="true"><span class="caret">▾</span><span class="gname">{{ g.label }}</span>

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from vmdash.config import WebSettings
 from vmdash.db import connect_rw, finish_run, start_run, write_snapshot
 from vmdash.mock.generate import generate_db
-from vmdash.models import Tag
+from vmdash.models import Nic, Tag
 from vmdash.web.app import create_app
 from vmdash.web.views import GROUPS
 
@@ -86,6 +86,23 @@ def test_unknown_group_falls_back_to_host(client):
 def test_host_column_only_when_not_grouped_by_host(client):
     assert "<th>Host</th>" not in get(client, "/?group=host").text
     assert "<th>Host</th>" in get(client, "/?group=folder").text
+
+
+def test_network_column(tmp_path):
+    conn = connect_rw(tmp_path / "n.db")
+    rid = start_run(conn, now=NOW)
+    finish_run(conn, rid, "success", now=NOW)
+    nics = (Nic(4000, "Network adapter 1", "VLAN<10>", "00:50:56:aa:00:01", True, ("10.10.0.5", "2001:db8::5")),
+            Nic(4001, "Network adapter 2", "", "", False))
+    write_snapshot(conn, make_inventory(vms=[make_vm("web01", dns_name="web01&co.lab", nics=nics)]), rid, 15)
+    conn.close()
+    text = get(make_client(tmp_path / "n.db")).text
+    assert "<th>Status</th><th>Network</th>" in text
+    assert '<td class="net"><div class="dns">web01&amp;co.lab</div>' in text
+    assert ('<div class="nic" title="Network adapter 1 · 00:50:56:aa:00:01"><span class="nn">VLAN&lt;10&gt;</span>'
+            '<span class="ip">10.10.0.5</span><span class="ip">2001:db8::5</span></div>') in text
+    assert ('<div class="nic" title="Network adapter 2"><span class="nn">Network adapter 2</span>'
+            '<span class="sub">disconnected</span></div>') in text
 
 
 def test_templates_marked(client):

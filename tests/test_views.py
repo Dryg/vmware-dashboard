@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from factories import GB, NOW, make_host, make_inventory, make_vm
 
-from vmdash.models import Datastore, Disk, Tag
+from vmdash.models import Datastore, Disk, Nic, Tag
 from vmdash.web.queries import RunInfo, SyncStatus
 from vmdash.web.views import (
     GROUPS,
@@ -154,11 +154,13 @@ def test_row_fields():
 
 
 def test_search_text_contains_everything():
-    vm = make_vm("web01", tags=(Tag("env", "prod"),), guest_os="Ubuntu 24.04 LTS", vcpu=4, memory_mb=16384)
+    vm = make_vm("web01", tags=(Tag("env", "prod"),), guest_os="Ubuntu 24.04 LTS", vcpu=4, memory_mb=16384,
+                 dns_name="web01.lab.local",
+                 nics=(Nic(4000, "Network adapter 1", "VLAN10-Prod", "00:50:56:AA:00:01", True, ("10.10.0.5",)),))
     s = build_groups(make_inventory(vms=[vm]), "host", NOW)[0].rows[0].search
     for needle in ("web01", "web server", "production/web", "env:prod", "env prod", "ubuntu 24.04", "running",
                    "up 21 d", "esx01.lab.local", "cluster-a", "connected", "[ds-ssd01] web01/", "4 vcpu", "16 gb",
-                   "60 gb", "31 gb"):
+                   "60 gb", "31 gb", "web01.lab.local", "vlan10-prod", "00:50:56:aa:00:01", "10.10.0.5"):
         assert needle in s, needle
     assert s == s.lower()
 

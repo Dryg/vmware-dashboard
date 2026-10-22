@@ -10,9 +10,9 @@ from vmdash.models import Inventory
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KEEP_RUNS = 500
-SNAPSHOT_TABLES = ("hosts", "datastores", "vms", "disks", "tags", "meta")
+SNAPSHOT_TABLES = ("hosts", "datastores", "vms", "disks", "nics", "tags", "meta")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sync_runs (
@@ -28,13 +28,17 @@ CREATE TABLE IF NOT EXISTS vms (
     moref TEXT PRIMARY KEY, host_moref TEXT, name TEXT NOT NULL, description TEXT NOT NULL,
     folder_path TEXT NOT NULL, power_state TEXT NOT NULL, connection_state TEXT NOT NULL,
     is_template INTEGER NOT NULL, vcpu INTEGER NOT NULL, memory_mb INTEGER NOT NULL,
-    guest_os TEXT NOT NULL, boot_time TEXT, datastore_path TEXT NOT NULL);
+    guest_os TEXT NOT NULL, boot_time TEXT, datastore_path TEXT NOT NULL, dns_name TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS disks (
     vm_moref TEXT NOT NULL, key INTEGER NOT NULL, label TEXT NOT NULL,
     capacity_bytes INTEGER NOT NULL, used_bytes INTEGER NOT NULL, datastore TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS nics (
+    vm_moref TEXT NOT NULL, key INTEGER NOT NULL, label TEXT NOT NULL, network TEXT NOT NULL,
+    mac TEXT NOT NULL, connected INTEGER NOT NULL, ips TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tags (vm_moref TEXT NOT NULL, category TEXT NOT NULL, name TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS disks_vm ON disks (vm_moref);
+CREATE INDEX IF NOT EXISTS nics_vm ON nics (vm_moref);
 CREATE INDEX IF NOT EXISTS tags_vm ON tags (vm_moref);
 """
 
@@ -122,15 +126,20 @@ def write_snapshot(conn: sqlite3.Connection, inv: Inventory, run_id: int, interv
             [(d.moref, d.name, d.capacity_bytes, d.free_bytes) for d in inv.datastores],
         )
         conn.executemany(
-            "INSERT INTO vms VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO vms VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(v.moref, v.host_moref, v.name, v.description, v.folder_path, v.power_state,
               v.connection_state, int(v.is_template), v.vcpu, v.memory_mb, v.guest_os,
-              _iso(v.boot_time), v.datastore_path) for v in inv.vms],
+              _iso(v.boot_time), v.datastore_path, v.dns_name) for v in inv.vms],
         )
         conn.executemany(
             "INSERT INTO disks VALUES (?, ?, ?, ?, ?, ?)",
             [(v.moref, d.key, d.label, d.capacity_bytes, d.used_bytes, d.datastore)
              for v in inv.vms for d in v.disks],
+        )
+        conn.executemany(
+            "INSERT INTO nics VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(v.moref, n.key, n.label, n.network, n.mac, int(n.connected), " ".join(n.ips))
+             for v in inv.vms for n in v.nics],
         )
         conn.executemany(
             "INSERT INTO tags VALUES (?, ?, ?)",

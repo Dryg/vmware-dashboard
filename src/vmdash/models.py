@@ -31,6 +31,18 @@ class Disk:
 
 
 @dataclass(frozen=True, slots=True)
+class Nic:
+    """A virtual network adapter; ips come from VMware Tools and are empty when the guest does not report them."""
+
+    key: int
+    label: str
+    network: str
+    mac: str
+    connected: bool
+    ips: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Tag:
     category: str
     name: str
@@ -51,7 +63,9 @@ class Vm:
     guest_os: str
     boot_time: datetime | None
     datastore_path: str  # "[ds-ssd01] web01/"
+    dns_name: str = ""  # guest host name reported by VMware Tools
     disks: tuple[Disk, ...] = ()
+    nics: tuple[Nic, ...] = ()
     tags: tuple[Tag, ...] = ()
 
 

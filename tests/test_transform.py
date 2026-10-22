@@ -3,11 +3,13 @@ from datetime import UTC, datetime
 from vmdash.collector.transform import (
     RawInventory,
     build_inventory,
+    build_nics,
     datastore_dir,
     disk_used_bytes,
     folder_path,
+    useful_ips,
 )
-from vmdash.models import Datastore, Disk, Host, Tag
+from vmdash.models import Datastore, Disk, Host, Nic, Tag
 
 GB = 2**30
 BOOT = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
@@ -33,6 +35,7 @@ def raw(vms=None, hosts=None, compute=None, folders=None):
                        "runtime.inMaintenanceMode": True},
         },
         datastores={"datastore-1": {"name": "ds-ssd01", "summary.capacity": 2048 * GB, "summary.freeSpace": 900 * GB}},
+        networks={"network-7": {"name": "VM Network"}, "dvportgroup-11": {"name": "VLAN10-Prod"}},
         vms=vms if vms is not None else {},
     )
 
@@ -40,12 +43,18 @@ def raw(vms=None, hosts=None, compute=None, folders=None):
 FULL_VM = {
     "name": "web01", "parent": "f3", "config.annotation": "Nginx\nfrontend", "config.template": False,
     "config.hardware.numCPU": 4, "config.hardware.memoryMB": 16384,
-    "config.hardware.device": [
+    "config.hardware.device": {"disks": [
         {"key": 2000, "label": "Hard disk 1", "capacity_bytes": 60 * GB, "datastore": "datastore-1",
          "file_name": "[ds-ssd01] web01/web01.vmdk"},
         {"key": 2001, "label": "Hard disk 2", "capacity_bytes": 200 * GB, "datastore": "datastore-1",
          "file_name": "[ds-ssd01] web01/web01_1.vmdk"},
-    ],
+    ], "nics": [
+        {"key": 4000, "label": "Network adapter 1", "mac": "00:50:56:aa:00:01", "connected": True,
+         "network": "dvportgroup-11", "network_name": ""},
+    ]},
+    "guest.hostName": "web01.lab.local",
+    "guest.net": [{"device_key": 4000, "network": "VLAN10-Prod", "mac": "00:50:56:aa:00:01",
+                   "ips": ["10.10.0.5", "fe80::250:56ff:feaa:1"]}],
     "config.files.vmPathName": "[ds-ssd01] web01/web01.vmx", "config.guestFullName": "Ubuntu Linux (64-bit)",
     "guest.guestFullName": "Ubuntu 24.04.1 LTS", "runtime.powerState": "poweredOn",
     "runtime.connectionState": "connected", "runtime.host": "host-1", "runtime.bootTime": BOOT,
@@ -97,6 +106,8 @@ def test_build_inventory_full_vm():
     assert vm.disks == (Disk(2000, "Hard disk 1", 60 * GB, 31 * GB, "ds-ssd01"),
                         Disk(2001, "Hard disk 2", 200 * GB, 80 * GB, "ds-ssd01"))
     assert vm.tags == (Tag("env", "prod"),)
+    assert vm.dns_name == "web01.lab.local"
+    assert vm.nics == (Nic(4000, "Network adapter 1", "VLAN10-Prod", "00:50:56:aa:00:01", True, ("10.10.0.5",)),)
 
 
 def test_guest_os_fallback():
@@ -110,8 +121,8 @@ def test_standalone_host_has_no_cluster():
 
 
 def test_disk_datastore_falls_back_to_file_name():
-    vm = dict(FULL_VM, **{"config.hardware.device": [
-        {"key": 2000, "label": "Hard disk 1", "capacity_bytes": GB, "datastore": None, "file_name": "[nfs01] a/a.vmdk"}]})
+    vm = dict(FULL_VM, **{"config.hardware.device": {"disks": [
+        {"key": 2000, "label": "Hard disk 1", "capacity_bytes": GB, "datastore": None, "file_name": "[nfs01] a/a.vmdk"}]}})
     assert build_inventory(raw(vms={"vm-1": vm}), {}).vms[0].disks[0].datastore == "nfs01"
 
 
@@ -120,9 +131,42 @@ def test_inaccessible_vm_is_kept():
     (out,) = build_inventory(raw(vms={"vm-9": vm}), {}).vms
     assert (out.name, out.vcpu, out.memory_mb, out.disks, out.description, out.datastore_path, out.boot_time) == (
         "x", 0, 0, (), "", "", None)
+    assert (out.nics, out.dns_name) == ((), "")
     assert (out.connection_state, out.host_moref, out.folder_path, out.guest_os, out.is_template) == (
         "inaccessible", None, "", "", False)
 
 
 def test_vm_without_name_uses_moref():
     assert build_inventory(raw(vms={"vm-7": {}}), {}).vms[0].name == "vm-7"
+
+
+def test_useful_ips_ipv4_first_without_link_local():
+    assert useful_ips(["fe80::1", "2001:db8::5", "10.0.0.5", "169.254.3.4", "10.0.0.5", "10.0.0.6", "bogus",
+                       "fe80::2%eth0"]) == ("10.0.0.5", "10.0.0.6", "2001:db8::5")
+    assert useful_ips([]) == ()
+
+
+def nic(key=4000, **kw):
+    return {"key": key, "label": f"Network adapter {key - 3999}", "mac": f"00:50:56:00:00:{key - 4000:02x}",
+            "connected": True, "network": None, "network_name": "", **kw}
+
+
+def test_build_nics_network_name_sources():
+    names = {"network-7": "VM Network", "dvportgroup-11": "VLAN10-Prod"}
+    nics = build_nics([nic(4000, network="network-7"), nic(4001, network="dvportgroup-11"),
+                       nic(4002, network_name="Backing name"), nic(4003)],
+                      [{"device_key": 4003, "network": "Guest view", "mac": "", "ips": []}], names)
+    assert [n.network for n in nics] == ["VM Network", "VLAN10-Prod", "Backing name", "Guest view"]
+
+
+def test_build_nics_matches_guest_by_key_then_mac():
+    guest = [{"device_key": 4001, "network": "", "mac": "", "ips": ["10.0.0.2"]},
+             {"device_key": -1, "network": "", "mac": "00:50:56:00:00:00", "ips": ["10.0.0.1"]},
+             {"device_key": -1, "network": "docker0", "mac": "02:42:00:00:00:01", "ips": ["172.17.0.1"]}]
+    nics = build_nics([nic(4000, mac="00:50:56:00:00:00"), nic(4001, connected=False)], guest, {})
+    assert [(n.ips, n.connected) for n in nics] == [(("10.0.0.1",), True), (("10.0.0.2",), False)]
+
+
+def test_build_nics_without_guest_info():
+    (n,) = build_nics([nic(4000, label="")], [], {})
+    assert (n.label, n.network, n.ips) == ("Network adapter 1", "", ())

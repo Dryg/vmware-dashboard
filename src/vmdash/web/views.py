@@ -161,7 +161,8 @@ def _row(vm: Vm, hosts: dict[str, Host], now: datetime) -> VmRow:
     parts = [
         vm.name, vm.description, vm.folder_path, vm.guest_os, status, uptime,
         host.name if host else NO_HOST, host.cluster or "" if host else "", host_state(host)[0] if host else "",
-        vm.datastore_path, f"{vm.vcpu} vcpu", f"{fmt_ram(vm.memory_mb)} gb",
+        vm.datastore_path, f"{vm.vcpu} vcpu", f"{fmt_ram(vm.memory_mb)} gb", vm.dns_name,
+        *(f"{n.network} {n.mac} {' '.join(n.ips)}" for n in vm.nics),
         *(f"{t.category}:{t.name} {t.category} {t.name}" for t in vm.tags),
         *(f"{fmt_size(d.capacity_bytes)} {fmt_size(d.used_bytes)}" for d in vm.disks),
     ]

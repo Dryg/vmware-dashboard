@@ -5,7 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 
-from vmdash.models import Datastore, Disk, Host, Inventory, Tag, Vm
+from vmdash.models import Datastore, Disk, Host, Inventory, Nic, Tag, Vm
 
 DEFAULT_INTERVAL = 15
 
@@ -43,6 +43,10 @@ def read_inventory(conn: sqlite3.Connection) -> Inventory:
     disks: dict[str, list[Disk]] = defaultdict(list)
     for r in conn.execute("SELECT * FROM disks ORDER BY rowid"):
         disks[r["vm_moref"]].append(Disk(r["key"], r["label"], r["capacity_bytes"], r["used_bytes"], r["datastore"]))
+    nics: dict[str, list[Nic]] = defaultdict(list)
+    for r in conn.execute("SELECT * FROM nics ORDER BY rowid"):
+        nics[r["vm_moref"]].append(Nic(r["key"], r["label"], r["network"], r["mac"], bool(r["connected"]),
+                                       tuple(r["ips"].split())))
     tags: dict[str, list[Tag]] = defaultdict(list)
     for r in conn.execute("SELECT * FROM tags ORDER BY rowid"):
         tags[r["vm_moref"]].append(Tag(r["category"], r["name"]))
@@ -59,8 +63,9 @@ def read_inventory(conn: sqlite3.Connection) -> Inventory:
             moref=r["moref"], name=r["name"], host_moref=r["host_moref"], description=r["description"],
             folder_path=r["folder_path"], power_state=r["power_state"], connection_state=r["connection_state"],
             is_template=bool(r["is_template"]), vcpu=r["vcpu"], memory_mb=r["memory_mb"], guest_os=r["guest_os"],
-            boot_time=_dt(r["boot_time"]), datastore_path=r["datastore_path"],
-            disks=tuple(disks.get(r["moref"], ())), tags=tuple(tags.get(r["moref"], ())),
+            boot_time=_dt(r["boot_time"]), datastore_path=r["datastore_path"], dns_name=r["dns_name"],
+            disks=tuple(disks.get(r["moref"], ())), nics=tuple(nics.get(r["moref"], ())),
+            tags=tuple(tags.get(r["moref"], ())),
         )
         for r in conn.execute("SELECT * FROM vms ORDER BY rowid")
     )

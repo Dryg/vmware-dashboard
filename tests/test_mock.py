@@ -42,6 +42,17 @@ def test_covers_required_cases():
     assert any(a >= 90 * day for a in ages)
 
 
+def test_network_data():
+    inv = generate_inventory(now=NOW)
+    up = [v for v in inv.vms if v.power_state == "poweredOn" and v.connection_state == "connected"]
+    assert all(v.dns_name and all(n.ips for n in v.nics) for v in up)
+    assert all(not v.dns_name and not any(n.ips for n in v.nics) for v in inv.vms if v not in up)
+    assert all(v.nics for v in inv.vms)
+    assert any(len(v.nics) == 2 for v in up)
+    assert any(":" in ip for v in up for n in v.nics for ip in n.ips)
+    assert any(not n.connected for v in inv.vms for n in v.nics)
+
+
 def test_small_counts_still_cover_cases():
     inv = generate_inventory(hosts=4, vms=12, now=NOW)
     assert any(v.host_moref is None for v in inv.vms)

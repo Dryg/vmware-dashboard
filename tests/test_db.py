@@ -5,6 +5,7 @@ import pytest
 from factories import make_inventory, make_vm
 
 from vmdash.db import (
+    SCHEMA_VERSION,
     connect_ro,
     connect_rw,
     fail_stale_runs,
@@ -26,7 +27,7 @@ def names(conn, table, col="name"):
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
@@ -92,7 +93,7 @@ def test_old_schema_version_is_recreated(tmp_path):
     raw.commit()
     raw.close()
     conn = connect_rw(path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     tables = names(conn, "sqlite_master where type='table'")
     assert "junk" not in tables and "vms" in tables
 

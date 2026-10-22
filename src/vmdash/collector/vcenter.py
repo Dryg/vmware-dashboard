@@ -17,6 +17,7 @@ VM_PROPS = [
     "name", "parent", "config.annotation", "config.template", "config.hardware.numCPU", "config.hardware.memoryMB",
     "config.hardware.device", "config.files.vmPathName", "config.guestFullName", "guest.guestFullName",
     "runtime.powerState", "runtime.connectionState", "runtime.host", "runtime.bootTime", "layoutEx",
+    "guest.hostName", "guest.net",
 ]
 
 PC = vmodl.query.PropertyCollector
@@ -50,6 +51,42 @@ def to_disks(devices) -> list[dict]:
     return disks
 
 
+def to_nics(devices) -> list[dict]:
+    """Virtual network adapters. "network" is a network moref (standard or distributed port group) or None."""
+    nics = []
+    for d in devices or []:
+        if not isinstance(d, vim.vm.device.VirtualEthernetCard):
+            continue
+        backing, network, name = d.backing, None, ""
+        if isinstance(backing, vim.vm.device.VirtualEthernetCard.NetworkBackingInfo):
+            network, name = plain(backing.network), backing.deviceName or ""
+        elif isinstance(backing, vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo):
+            network = backing.port.portgroupKey if backing.port else None  # the port group's moref id
+        nics.append({
+            "key": d.key,
+            "label": d.deviceInfo.label if d.deviceInfo else "",
+            "mac": d.macAddress or "",
+            "connected": bool(d.connectable and d.connectable.connected),
+            "network": network,
+            "network_name": name,
+        })
+    return nics
+
+
+def to_devices(devices) -> dict:
+    return {"disks": to_disks(devices), "nics": to_nics(devices)}
+
+
+def to_guest_nics(guest_nics) -> list[dict]:
+    """Adapters as VMware Tools sees them; device_key links to the virtual adapter (-1 for guest-only ones)."""
+    return [{
+        "device_key": n.deviceConfigId,
+        "network": n.network or "",
+        "mac": n.macAddress or "",
+        "ips": list(n.ipAddress or []),
+    } for n in guest_nics or []]
+
+
 def to_layout(layout) -> dict | None:
     if layout is None:
         return None
@@ -59,7 +96,7 @@ def to_layout(layout) -> dict | None:
     }
 
 
-CONVERT = {"config.hardware.device": to_disks, "layoutEx": to_layout}
+CONVERT = {"config.hardware.device": to_devices, "guest.net": to_guest_nics, "layoutEx": to_layout}
 
 
 def connect(settings: CollectorSettings):
@@ -127,6 +164,7 @@ def fetch_raw(si, settings: CollectorSettings) -> RawInventory:
                          extra=lambda o: {"is_cluster": isinstance(o, vim.ClusterComputeResource)}),
         hosts=_collect(si, root, vim.HostSystem, HOST_PROPS),
         datastores=_collect(si, root, vim.Datastore, DATASTORE_PROPS),
+        networks=_collect(si, root, vim.Network, ["name"]),
         vms=_collect(si, root, vim.VirtualMachine, VM_PROPS),
     )
     log.info("fetched %d hosts, %d VMs, %d datastores", len(raw.hosts), len(raw.vms), len(raw.datastores))
