@@ -207,3 +207,11 @@ def test_new_snapshot_is_shown(tmp_path):
     write_snapshot(conn, make_inventory(vms=[make_vm("brand-new-vm")]), rid, 15)
     conn.close()
     assert "brand-new-vm" in get(c).text
+
+
+def test_app_js_size():
+    assert (STATIC / "app.js").stat().st_size < 8192
+
+
+def test_page_loads_app_js(client):
+    assert '<script src="/static/app.js?v=' in get(client).text
