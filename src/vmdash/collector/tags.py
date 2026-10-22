@@ -1,15 +1,19 @@
 """vSphere Automation REST client for VM tags (vSphere 7.0U2+ /api endpoints)."""
 
 import logging
+import ssl
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
 import httpx
 
+from vmdash.config import https_url
 from vmdash.models import Tag
 
 log = logging.getLogger(__name__)
 
 BATCH = 200
+WORKERS = 8  # parallel GETs for category and tag details; the API has no batch read for them
 
 
 class TagError(Exception):
@@ -22,11 +26,11 @@ def _check(r: httpx.Response) -> httpx.Response:
     return r
 
 
-def fetch_vm_tags(host: str, user: str, password: str, verify: bool,
+def fetch_vm_tags(host: str, user: str, password: str, verify: ssl.SSLContext | bool,
                   transport: httpx.BaseTransport | None = None, timeout: float = 30.0) -> dict[str, list[Tag]]:
     """Return {vm moref: [Tag, ...]} sorted by (category, name)."""
     try:
-        with httpx.Client(base_url=f"https://{host}", verify=verify, timeout=timeout, transport=transport) as client:
+        with httpx.Client(base_url=https_url(host), verify=verify, timeout=timeout, transport=transport) as client:
             token = _check(client.post("/api/session", auth=(user, password))).json()
             client.headers["vmware-api-session-id"] = token
             try:
@@ -42,15 +46,15 @@ def fetch_vm_tags(host: str, user: str, password: str, verify: bool,
         raise TagError(f"unexpected response from {host}: {type(e).__name__}") from None
 
 
+def _details(client: httpx.Client, pool: ThreadPoolExecutor, kind: str) -> list[dict]:
+    ids = _check(client.get(f"/api/cis/tagging/{kind}")).json()
+    return list(pool.map(lambda i: _check(client.get(f"/api/cis/tagging/{kind}/{quote(i, safe=':')}")).json(), ids))
+
+
 def _collect(client: httpx.Client) -> dict[str, list[Tag]]:
-    categories = {
-        cid: _check(client.get(f"/api/cis/tagging/category/{quote(cid, safe=':')}")).json()["name"]
-        for cid in _check(client.get("/api/cis/tagging/category")).json()
-    }
-    tags: dict[str, Tag] = {}
-    for tid in _check(client.get("/api/cis/tagging/tag")).json():
-        t = _check(client.get(f"/api/cis/tagging/tag/{quote(tid, safe=':')}")).json()
-        tags[tid] = Tag(categories.get(t["category_id"], ""), t["name"])
+    with ThreadPoolExecutor(WORKERS) as pool:
+        categories = {c["id"]: c["name"] for c in _details(client, pool, "category")}
+        tags = {t["id"]: Tag(categories.get(t["category_id"], ""), t["name"]) for t in _details(client, pool, "tag")}
     if not tags:
         return {}
 

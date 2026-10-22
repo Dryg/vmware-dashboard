@@ -1,8 +1,9 @@
+import ssl
 from datetime import UTC, datetime
 
 from pyVmomi import vim
 
-from vmdash.collector.vcenter import host_port, plain, to_devices, to_disks, to_guest_nics, to_layout, to_nics
+from vmdash.collector.vcenter import plain, to_devices, to_disks, to_guest_nics, to_layout, to_nics
 
 GB = 2**30
 
@@ -31,7 +32,7 @@ def test_to_disks_rdm_without_datastore():
 def eth(key, mac, backing, connected=True):
     return vim.vm.device.VirtualVmxnet3(
         key=key, macAddress=mac, backing=backing, deviceInfo=vim.Description(label=f"Network adapter {key - 3999}"),
-        connectable=vim.vm.device.VirtualDevice.ConnectInfo(connected=connected))
+        connectable=vim.vm.device.VirtualDevice.ConnectInfo(connected=connected, startConnected=connected))
 
 
 def test_to_nics_standard_and_distributed_port_groups():
@@ -42,9 +43,9 @@ def test_to_nics_standard_and_distributed_port_groups():
                disk(2000, "Hard disk 1", GB, "[ds1] a/a.vmdk", "datastore-1")]
     assert to_nics(devices) == [
         {"key": 4000, "label": "Network adapter 1", "mac": "00:50:56:aa:00:01", "connected": True,
-         "network": "network-7", "network_name": "VM Network"},
+         "start_connected": True, "network": "network-7", "network_name": "VM Network"},
         {"key": 4001, "label": "Network adapter 2", "mac": "00:50:56:aa:00:02", "connected": False,
-         "network": "dvportgroup-11", "network_name": ""},
+         "start_connected": False, "network": "dvportgroup-11", "network_name": ""},
     ]
     assert [d["key"] for d in to_devices(devices)["disks"]] == [2000]
     assert to_nics(None) == []
@@ -81,11 +82,6 @@ def test_plain_converts_managed_objects_to_moref():
     assert plain("x") == "x"
 
 
-def test_host_port():
-    assert host_port("vcsa01.lab.local") == ("vcsa01.lab.local", 443)
-    assert host_port("localhost:8989") == ("localhost", 8989)
-
-
 def test_connect_sets_socket_timeout(monkeypatch):
     from vmdash.collector import vcenter
     from vmdash.config import CollectorSettings
@@ -95,6 +91,11 @@ def test_connect_sets_socket_timeout(monkeypatch):
     assert vcenter.connect(s) == "si"
     assert seen["httpConnectionTimeout"] == vcenter.CONNECT_TIMEOUT_S
     assert (seen["host"], seen["port"]) == ("vc", 8443)
+    assert seen["sslContext"].verify_mode == ssl.CERT_REQUIRED and seen["disableSslCertValidation"] is False
+    insecure = CollectorSettings(vcenter_host="vc", vcenter_user="u", vcenter_password="p",
+                                 vcenter_verify_ssl=False, _env_file=None)
+    vcenter.connect(insecure)
+    assert seen["sslContext"] is None and seen["disableSslCertValidation"] is True
 
 
 def test_find_datacenter_searches_nested_folders(monkeypatch):

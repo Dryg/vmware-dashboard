@@ -1,7 +1,14 @@
 """Inventory data shared by the collector, the database layer, the web views and the mock generator."""
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
+
+
+def datastore_name(path: str) -> str:
+    """'[ds-ssd01] web01/web01.vmx' -> 'ds-ssd01'"""
+    m = re.match(r"\[([^\]]*)\]", path or "")
+    return m.group(1) if m else ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +71,9 @@ class Vm:
     boot_time: datetime | None
     datastore_path: str  # "[ds-ssd01] web01/"
     dns_name: str = ""  # guest host name reported by VMware Tools
+    # Set when dns_name and the NIC IPs are last-known values kept from an earlier sync because the guest
+    # reports none now (VM off, Tools not running): the time they were last reported. None = reported now.
+    net_seen_at: datetime | None = None
     disks: tuple[Disk, ...] = ()
     nics: tuple[Nic, ...] = ()
     tags: tuple[Tag, ...] = ()

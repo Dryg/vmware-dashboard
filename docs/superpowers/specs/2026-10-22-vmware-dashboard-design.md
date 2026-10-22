@@ -56,8 +56,10 @@ vmware-dashboard/
       static/style.css
       static/app.js           # search, collapse, templates toggle, theme, auto-refresh
     mock/generate.py          # mock database generator
-  deploy/systemd/vmdash-collector.service
-  deploy/systemd/vmdash-web.service
+  examples/systemd/vmdash-collector.service
+  examples/systemd/vmdash-web.service
+  examples/nginx/*.conf         # reverse proxy at / or under a path prefix
+  examples/vmdash.env
   deploy/INSTALL.md
   docs/design/mockup.html
   tests/

@@ -7,6 +7,7 @@ from vmdash.collector.transform import (
     datastore_dir,
     disk_used_bytes,
     folder_path,
+    keep_last_network,
     useful_ips,
 )
 from vmdash.models import Datastore, Disk, Host, Nic, Tag
@@ -170,3 +171,42 @@ def test_build_nics_matches_guest_by_key_then_mac():
 def test_build_nics_without_guest_info():
     (n,) = build_nics([nic(4000, label="")], [], {})
     assert (n.label, n.network, n.ips) == ("Network adapter 1", "", ())
+
+
+def test_build_nics_uses_connect_at_power_on_when_not_running():
+    devices = [nic(4000, connected=False, start_connected=True), nic(4001, connected=False, start_connected=False)]
+    assert [n.connected for n in build_nics(devices, [], {}, running=False)] == [True, False]
+    assert [n.connected for n in build_nics(devices, [], {}, running=True)] == [False, False]
+
+
+SEEN = datetime(2026, 10, 20, 8, 0, tzinfo=UTC)
+
+
+def vm_with(ips=(), dns="", mac="00:50:56:00:00:01", key=4000, seen=None):
+    from factories import make_vm
+    return make_vm("web01", dns_name=dns, net_seen_at=seen,
+                   nics=(Nic(key, "Network adapter 1", "VLAN10", mac, True, tuple(ips)),))
+
+
+def test_keep_last_network_carries_ips_and_dns_when_guest_reports_none():
+    from factories import make_inventory
+    prev = vm_with(["10.0.0.5"], "web01.lab")
+    out = keep_last_network(make_inventory(vms=[vm_with()]), {prev.moref: prev}, SEEN).vms[0]
+    assert (out.dns_name, out.nics[0].ips, out.net_seen_at) == ("web01.lab", ("10.0.0.5",), SEEN)
+
+
+def test_keep_last_network_keeps_original_seen_time_and_matches_by_mac():
+    from factories import make_inventory
+    older = datetime(2026, 9, 1, tzinfo=UTC)
+    prev = vm_with(["10.0.0.5"], "web01.lab", key=4005, seen=older)
+    out = keep_last_network(make_inventory(vms=[vm_with()]), {prev.moref: prev}, SEEN).vms[0]
+    assert (out.nics[0].ips, out.net_seen_at) == (("10.0.0.5",), older)
+
+
+def test_keep_last_network_live_data_wins():
+    from factories import make_inventory
+    prev = vm_with(["10.0.0.5"], "old.lab")
+    live = vm_with(["10.0.0.9"], "")
+    assert keep_last_network(make_inventory(vms=[live]), {prev.moref: prev}, SEEN).vms[0] == live
+    new = vm_with()  # no previous data: unchanged, not marked as last-seen
+    assert keep_last_network(make_inventory(vms=[new]), {}, SEEN).vms[0] == new

@@ -45,9 +45,16 @@ def test_covers_required_cases():
 def test_network_data():
     inv = generate_inventory(now=NOW)
     up = [v for v in inv.vms if v.power_state == "poweredOn" and v.connection_state == "connected"]
-    assert all(v.dns_name and all(n.ips for n in v.nics) for v in up)
-    assert all(not v.dns_name and not any(n.ips for n in v.nics) for v in inv.vms if v not in up)
+    assert all(v.dns_name and all(n.ips for n in v.nics) and v.net_seen_at is None for v in up)
+    down = [v for v in inv.vms if v not in up and not v.is_template]
+    assert down and all(v.dns_name and v.net_seen_at and v.net_seen_at < NOW for v in down)
+    assert all(not v.dns_name and not any(n.ips for n in v.nics) for v in inv.vms if v.is_template)
     assert all(v.nics for v in inv.vms)
+    owners = {}
+    for v in inv.vms:
+        for ip in {ip for n in v.nics for ip in n.ips}:
+            owners.setdefault(ip, []).append(v.name)
+    assert [names for names in owners.values() if len(names) > 1] == [["old-crm", "db-warehouse01"]]
     assert any(len(v.nics) == 2 for v in up)
     assert any(":" in ip for v in up for n in v.nics for ip in n.ips)
     assert any(not n.connected for v in inv.vms for n in v.nics)

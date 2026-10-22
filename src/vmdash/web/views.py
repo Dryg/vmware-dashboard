@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from vmdash.models import Datastore, Host, Inventory, Vm
+from vmdash.models import Datastore, Host, Inventory, Vm, datastore_name
 from vmdash.web.queries import SyncStatus
 
 GROUPS: dict[str, str] = {
@@ -102,11 +102,6 @@ def uptime_text(vm: Vm, now: datetime) -> str:
     return f"up {up.days} d"
 
 
-def datastore_name(datastore_path: str) -> str:
-    m = re.match(r"\[([^\]]*)\]", datastore_path)
-    return m.group(1) if m else ""
-
-
 def host_state(host: Host) -> tuple[str, str]:
     """(label, css class) for a host's connection state."""
     if host.connection_state == "connected":
@@ -129,6 +124,16 @@ class VmRow:
     total_cap: int
     total_used: int
     search: str
+    ip_conflicts: dict[str, list[str]]  # IP -> names of the other VMs that have it
+
+
+def ip_owners(inv: Inventory) -> dict[str, list[str]]:
+    """IP -> names of the VMs that have it, current or last-known (an off VM's IP may have been reused)."""
+    owners: dict[str, list[str]] = {}
+    for vm in inv.vms:
+        for ip in {ip for n in vm.nics for ip in n.ips}:
+            owners.setdefault(ip, []).append(vm.name)
+    return owners
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,8 +157,10 @@ class Group:
     datastore: Datastore | None
 
 
-def _row(vm: Vm, hosts: dict[str, Host], now: datetime) -> VmRow:
+def _row(vm: Vm, hosts: dict[str, Host], owners: dict[str, list[str]], now: datetime) -> VmRow:
     host = hosts.get(vm.host_moref or "")
+    conflicts = {ip: [o for o in owners[ip] if o != vm.name] or [vm.name]
+                 for n in vm.nics for ip in n.ips if len(owners.get(ip, ())) > 1}
     status = display_status(vm)
     uptime = uptime_text(vm, now)
     cap = sum(d.capacity_bytes for d in vm.disks)
@@ -163,11 +170,12 @@ def _row(vm: Vm, hosts: dict[str, Host], now: datetime) -> VmRow:
         host.name if host else NO_HOST, host.cluster or "" if host else "", host_state(host)[0] if host else "",
         vm.datastore_path, f"{vm.vcpu} vcpu", f"{fmt_ram(vm.memory_mb)} gb", vm.dns_name,
         *(f"{n.network} {n.mac} {' '.join(n.ips)}" for n in vm.nics),
+        "last seen" if vm.net_seen_at else "", "ip conflict" if conflicts else "",
         *(f"{t.category}:{t.name} {t.category} {t.name}" for t in vm.tags),
         *(f"{fmt_size(d.capacity_bytes)} {fmt_size(d.used_bytes)}" for d in vm.disks),
     ]
     return VmRow(vm, host.name if host else NO_HOST, (host.cluster or "") if host else "", status,
-                 status_class(status), uptime, cap, used, " ".join(p for p in parts if p).lower())
+                 status_class(status), uptime, cap, used, " ".join(p for p in parts if p).lower(), conflicts)
 
 
 def _totals(rows: list[VmRow]) -> Totals:
@@ -205,16 +213,18 @@ def build_groups(inv: Inventory, group: str, now: datetime) -> list[Group]:
     }[group]
     order: Callable[[str], tuple] = {
         "host": _last(NO_HOST),
+        "folder": _last(NO_FOLDER),
         "cluster": _last(NO_CLUSTER),
         "datastore": _last(UNKNOWN_DS),
         "os": _last(UNKNOWN_OS),
         "power": lambda k: (POWER_ORDER.index(k),),
         "uptime": lambda k: (UPTIME_BUCKETS.index(k),),
-    }.get(group, natural_key)
+    }[group]
 
+    owners = ip_owners(inv)
     buckets: dict[str, list[VmRow]] = {}
     for vm in inv.vms:
-        row = _row(vm, hosts, now)
+        row = _row(vm, hosts, owners, now)
         buckets.setdefault(key_fn(row), []).append(row)
 
     groups = []
@@ -232,16 +242,11 @@ def totals_of(groups: list[Group]) -> Totals:
     return _totals([r for g in groups for r in g.rows])
 
 
-def summary(inv: Inventory) -> Totals:
-    hosts = {h.moref: h for h in inv.hosts}
-    return _totals([_row(vm, hosts, datetime.now().astimezone()) for vm in inv.vms])
-
-
 # ---------- sync badge ----------
 
 @dataclass(frozen=True, slots=True)
 class Badge:
-    state: str  # ok | running | failed | stale | none
+    state: str  # ok | partial | running | failed | stale | none
     line1: str
     line2: str
     banner: str | None
@@ -258,6 +263,12 @@ def badge(st: SyncStatus, now: datetime) -> Badge:
         tail = f" {data_from}." if has_data else ""
         return Badge("failed", f"Sync failed {fmt_when(at, now)}", data_from,
                      f"Last sync failed at {fmt_datetime(at)}: {error}.{tail}")
+    if run and run.status == "partial" and not too_old:
+        at = run.finished_at or run.started_at
+        error = (run.error or "unknown error").removeprefix("tags: ").rstrip(". ")
+        return Badge("partial", f"Synced {fmt_when(at, now)}, tags failed", "Tags are from an earlier sync",
+                     f"Tags could not be read at {fmt_datetime(at)}: {error}. VM data is current; "
+                     "tags shown are from the last sync that read them.")
     if run and run.status == "running" and not too_old:
         return Badge("running", f"Syncing… started {fmt_when(run.started_at, now)}", data_from, None)
     if not has_data:

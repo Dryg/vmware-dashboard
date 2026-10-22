@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pydantic import ValidationError
 
 from vmdash.collector.sync import run_sync
-from vmdash.config import CollectorSettings, add_common_args, load_settings
+from vmdash.config import CollectorSettings, add_common_args, load_settings, settings_errors
 from vmdash.db import connect_rw, fail_stale_runs
 from vmdash.log import setup_logging
 
@@ -38,11 +38,13 @@ def main(argv: list[str] | None = None) -> int:
         settings = load_settings(CollectorSettings, args)
     except ValidationError as e:
         setup_logging("INFO", None)
-        fields = ", ".join(".".join(map(str, err["loc"])).upper() for err in e.errors())
-        log.error("invalid collector settings (check .env): %s", fields)
+        log.error("invalid collector settings: %s", settings_errors(e))
         return 2
 
     setup_logging(settings.log_level, settings.log_file)
+    if not settings.vcenter_verify_ssl:
+        log.warning("VCENTER_VERIFY_SSL=false: the vCenter certificate is not checked, so the password could be "
+                    "sent to an impostor. Set VCENTER_CA_FILE to the vCenter CA instead if you can.")
     conn = connect_rw(settings.sqlite_path)
     try:
         stale = fail_stale_runs(conn)

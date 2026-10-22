@@ -4,7 +4,7 @@ from vmdash.collector.sync import run_sync
 from vmdash.collector.tags import TagError
 from vmdash.collector.transform import RawInventory
 from vmdash.config import CollectorSettings
-from vmdash.db import connect_rw
+from vmdash.db import connect_rw, parse_iso, read_inventory
 from vmdash.models import Tag
 
 
@@ -111,3 +111,41 @@ def test_multiline_error_collapsed(conn, settings):
         raise RuntimeError("line one\n   line two\n")
     run_sync(settings, conn, fetch=multi, fetch_tags=no_tags)
     assert last_run(conn)["error"] == "RuntimeError: line one line two"
+
+
+def test_database_error_does_not_raise(settings):
+    conn = connect_rw(settings.sqlite_path)
+    conn.close()  # every statement now raises sqlite3.ProgrammingError
+    assert run_sync(settings, conn, fetch=fake_raw, fetch_tags=no_tags) == "failed"
+
+
+def test_powered_off_vm_keeps_last_known_ips(conn, settings):
+    def raw_with(power, guest):
+        raw = fake_raw(settings)
+        raw.vms["vm-1"].update({
+            "runtime.powerState": power,
+            "config.hardware.device": {"disks": [], "nics": [
+                {"key": 4000, "label": "Network adapter 1", "mac": "00:50:56:00:00:01", "connected": power == "poweredOn",
+                 "start_connected": True, "network": None, "network_name": "VM Network"}]},
+            **guest,
+        })
+        return lambda _s: raw
+
+    up = {"guest.hostName": "web01.lab", "guest.net": [{"device_key": 4000, "network": "VM Network",
+                                                         "mac": "00:50:56:00:00:01", "ips": ["10.0.0.5"]}]}
+    run_sync(settings, conn, fetch=raw_with("poweredOn", up), fetch_tags=no_tags)
+    first = parse_iso(meta(conn)["snapshot_at"])
+    run_sync(settings, conn, fetch=raw_with("poweredOff", {}), fetch_tags=no_tags)
+    run_sync(settings, conn, fetch=raw_with("poweredOff", {}), fetch_tags=no_tags)
+    (vm,) = read_inventory(conn).vms
+    assert (vm.dns_name, vm.nics[0].ips, vm.nics[0].connected, vm.net_seen_at) == (
+        "web01.lab", ("10.0.0.5",), True, first)
+
+
+def test_tag_failure_keeps_previous_tags(conn, settings):
+    run_sync(settings, conn, fetch=fake_raw, fetch_tags=lambda s: {"vm-1": [Tag("env", "prod")]})
+
+    def bad_tags(_s):
+        raise TagError("GET /api/cis/tagging/tag returned HTTP 503")
+    assert run_sync(settings, conn, fetch=fake_raw, fetch_tags=bad_tags) == "partial"
+    assert [tuple(r) for r in conn.execute("select category, name from tags")] == [("env", "prod")]

@@ -14,7 +14,6 @@ from vmdash.web.views import (
     fmt_ram,
     fmt_size,
     natural_key,
-    summary,
     uptime_bucket,
     uptime_text,
 )
@@ -57,7 +56,7 @@ def test_vms_sorted_inside_group():
 def test_folder_group_uses_first_segment():
     inv = make_inventory(vms=[make_vm("a", folder_path="Production/Web"), make_vm("b", folder_path="Production/DB"),
                               make_vm("c", folder_path="Dev"), make_vm("d", folder_path="")])
-    assert keys(build_groups(inv, "folder", NOW)) == ["Dev", "No folder", "Production"]
+    assert keys(build_groups(inv, "folder", NOW)) == ["Dev", "Production", "No folder"]
 
 
 def test_power_group_order():
@@ -137,12 +136,6 @@ def test_group_totals_exclude_templates():
     t = build_groups(inv, "host", NOW)[0].totals
     assert (t.vms, t.running, t.vcpu, t.ram_gb, t.cap, t.used) == (1, 1, 4, 8, 60 * GB, 31 * GB)
     assert len(build_groups(inv, "host", NOW)[0].rows) == 2
-
-
-def test_summary():
-    inv = make_inventory(vms=[make_vm("a"), make_vm("b", power_state="poweredOff"), make_vm("t", is_template=True)])
-    s = summary(inv)
-    assert (s.hosts, s.vms, s.running, s.vcpu) == (1, 2, 1, 8)
 
 
 def test_row_fields():
@@ -250,3 +243,27 @@ def test_badge_failed_days_later_shows_date():
 def test_badge_stale_other_day_shows_date():
     b = badge(status(run("success", NOW, NOW), NOW), NOW + timedelta(days=1))
     assert b.line2 == "Last sync 22.10.2026 12:00 · expected every 15 min"
+
+
+def test_ip_conflicts_and_last_seen_in_rows():
+    nic = lambda ip: (Nic(4000, "Network adapter 1", "VLAN10", "", True, (ip,)),)  # noqa: E731
+    old = make_vm("old", power_state="poweredOff", nics=nic("10.0.0.5"), net_seen_at=NOW)
+    inv = make_inventory(vms=[old, make_vm("new", nics=nic("10.0.0.5")), make_vm("other", nics=nic("10.0.0.6"))])
+    rows = {r.vm.name: r for r in build_groups(inv, "host", NOW)[0].rows}
+    assert rows["old"].ip_conflicts == {"10.0.0.5": ["new"]}
+    assert rows["new"].ip_conflicts == {"10.0.0.5": ["old"]}
+    assert rows["other"].ip_conflicts == {}
+    assert "ip conflict" in rows["new"].search and "ip conflict" not in rows["other"].search
+    assert "last seen" in rows["old"].search and "last seen" not in rows["new"].search
+
+
+def test_badge_partial_tags_failed():
+    st = status(run("partial", NOW, NOW + timedelta(seconds=30), "tags: TagError: GET /api/x returned HTTP 503"), NOW)
+    b = badge(st, NOW + timedelta(minutes=2))
+    assert (b.state, b.line1, b.line2) == ("partial", "Synced 12:00, tags failed", "Tags are from an earlier sync")
+    assert b.banner == ("Tags could not be read at 22.10.2026 12:00: TagError: GET /api/x returned HTTP 503. "
+                        "VM data is current; tags shown are from the last sync that read them.")
+
+
+def test_badge_partial_too_old_is_stale():
+    assert badge(status(run("partial", NOW, NOW, "tags: x"), NOW), NOW + timedelta(hours=2)).state == "stale"

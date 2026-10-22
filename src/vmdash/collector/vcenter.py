@@ -7,7 +7,7 @@ from pyVmomi import vim, vmodl
 from pyVmomi.VmomiSupport import ManagedObject
 
 from vmdash.collector.transform import RawInventory
-from vmdash.config import CollectorSettings
+from vmdash.config import CollectorSettings, host_port, vcenter_tls
 
 log = logging.getLogger(__name__)
 
@@ -22,11 +22,6 @@ VM_PROPS = [
 
 PC = vmodl.query.PropertyCollector
 CONNECT_TIMEOUT_S = 120  # socket timeout; without it a stuck vCenter blocks the collector forever
-
-
-def host_port(host: str) -> tuple[str, int]:
-    name, sep, port = host.rpartition(":")
-    return (name, int(port)) if sep and port.isdigit() else (host, 443)
 
 
 def plain(value):
@@ -66,7 +61,8 @@ def to_nics(devices) -> list[dict]:
             "key": d.key,
             "label": d.deviceInfo.label if d.deviceInfo else "",
             "mac": d.macAddress or "",
-            "connected": bool(d.connectable and d.connectable.connected),
+            "connected": bool(d.connectable and d.connectable.connected),  # only meaningful while running
+            "start_connected": bool(d.connectable and d.connectable.startConnected),
             "network": network,
             "network_name": name,
         })
@@ -101,9 +97,10 @@ CONVERT = {"config.hardware.device": to_devices, "guest.net": to_guest_nics, "la
 
 def connect(settings: CollectorSettings):
     host, port = host_port(settings.vcenter_host)
+    tls = vcenter_tls(settings)
     return SmartConnect(host=host, port=port, user=settings.vcenter_user,
                         pwd=settings.vcenter_password.get_secret_value(),
-                        disableSslCertValidation=not settings.vcenter_verify_ssl,
+                        sslContext=tls, disableSslCertValidation=tls is None,
                         httpConnectionTimeout=CONNECT_TIMEOUT_S)
 
 

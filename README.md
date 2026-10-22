@@ -19,6 +19,37 @@ WEB_USER=admin WEB_PASSWORD=admin SQLITE_PATH=mock.db uv run vmdash-web
 # open http://localhost:8080  (admin / admin)
 ```
 
+## Read-only vCenter account
+
+The collector only reads, so give it its own account with the built-in **Read-only** role and nothing else.
+Steps for the vSphere Client 7 and 8 (you need an administrator login):
+
+1. **Create the user.** Menu → **Administration** → **Single Sign On** → **Users and Groups** → **Users** tab.
+   Pick the domain `vsphere.local`, click **Add**, set the username `svc-vmdash` and a long random password.
+   (An Active Directory service account also works; skip this step and use `svc-vmdash@your.domain`.)
+2. **Give it Read-only as a global permission.** Menu → **Administration** → **Access Control** →
+   **Global Permissions** → **Add**. Domain `vsphere.local`, user `svc-vmdash`, role **Read-only**,
+   tick **Propagate to children**, click **OK**.
+3. **Check it.** Log in to the vSphere Client as `svc-vmdash@vsphere.local`: you should see every VM and tag,
+   and every action (power, edit, delete) should be greyed out. Then run `vmdash-collector --once`.
+
+**Why a global permission:** tags and tag categories are global objects. A permission set only on the vCenter
+object gives the collector all VM data but no tags, and the page then shows "tags failed".
+
+**Privileges:** the Read-only role contains exactly `System.Anonymous`, `System.View` and `System.Read`.
+That covers everything vmdash reads: inventory, hardware, disks and file sizes, guest info from VMware Tools
+(IPs, DNS name), hosts, clusters, datastores and tags. To limit vmdash to one datacenter, set
+`VCENTER_DATACENTER`; the permission can stay global.
+
+**Avoid two outages:**
+
+- **Password expiry.** `vsphere.local` passwords expire after 90 days by default, and the sync stops working
+  then. Either raise *Maximum lifetime* under Administration → Single Sign On → Configuration →
+  Local Accounts → Password Policy (it applies to every `vsphere.local` user), or put a reminder in your calendar.
+  AD accounts follow your domain's policy.
+- **Lockout.** After 5 wrong passwords (default) the account is locked. A wrong `VCENTER_PASSWORD` fails every
+  sync, so check `journalctl -u vmdash-collector` after changing it.
+
 ## Run against vCenter
 
 ```bash
@@ -30,18 +61,23 @@ uv run vmdash-web
 
 All commands accept `--env-file PATH` and `--db PATH` (overrides `SQLITE_PATH`).
 Every setting is documented in [.env.example](.env.example).
-Production install with systemd: [deploy/INSTALL.md](deploy/INSTALL.md).
+Production install with systemd and nginx: [deploy/INSTALL.md](deploy/INSTALL.md);
+the config files it uses are in [examples/](examples/).
 
 ## Page features
 
 - Search box (`/` or `Ctrl+K`): every word must match; searches name, description, folder, tags, OS,
   status, uptime, host, cluster, datastore, sizes, DNS name, network, MAC and IP addresses.
-- Network column: the guest's DNS name and every network adapter with its port group and IPs
-  (IPs and DNS name come from VMware Tools, so they are empty for powered-off VMs or VMs without Tools).
+- Network column: the guest's DNS name and every network adapter with its port group and IPs.
+  IPs and DNS name come from VMware Tools; when a VM is off (or Tools stops reporting) the last known
+  values stay, greyed out with "last seen <date>". An IP found on more than one VM is shown in red with
+  the other VM's name (search `ip conflict` to list them all).
 - Group by host (default), folder, cluster, datastore, power state, uptime or guest OS (`?group=` in the URL).
 - Show templates toggle, collapsible groups, light/dark theme (remembered per browser).
-- The header shows sync status; the page reloads itself when a new snapshot arrives.
-- `GET /healthz` (no auth) for monitoring; `GET /status.json` for the sync state.
+- The header shows sync status; the page reloads itself when a new snapshot arrives. A failed sync turns it
+  red with the error in a banner; a sync where only tags failed turns it orange (tags from the previous sync stay).
+- `GET /healthz` (no auth) for monitoring: HTTP 503 when the data is older than 3 sync intervals, and
+  `"last_run": "success" | "partial" | "failed"` to alert on the first failure. `GET /status.json` for the sync state.
 
 ## Development
 

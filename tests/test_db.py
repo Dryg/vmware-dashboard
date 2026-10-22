@@ -48,11 +48,12 @@ def test_write_snapshot_replaces_previous(conn):
 
 def test_snapshot_meta(conn):
     rid = start_run(conn)
-    write_snapshot(conn, make_inventory(), rid, 15)
+    write_snapshot(conn, make_inventory(), rid, 15, now=datetime(2026, 10, 22, 12, 0, tzinfo=UTC))
     meta = dict(conn.execute("select key, value from meta").fetchall())
     assert len(meta.pop("snapshot_uid")) == 32
     assert meta == {"vcenter_host": "vcsa01.lab.local", "datacenter": "DC-Main",
-                    "sync_interval_minutes": "15", "snapshot_id": str(rid)}
+                    "sync_interval_minutes": "15", "snapshot_id": str(rid),
+                    "snapshot_at": "2026-10-22T12:00:00+00:00"}
 
 
 def test_boot_time_round_trip_is_utc_iso(conn):
@@ -139,3 +140,10 @@ def test_snapshot_uid_changes_every_write(conn):
     first = conn.execute("select value from meta where key='snapshot_uid'").fetchone()[0]
     write_snapshot(conn, make_inventory(), rid, 15)
     assert conn.execute("select value from meta where key='snapshot_uid'").fetchone()[0] != first
+
+
+def test_fail_stale_runs_sets_finished_at(conn):
+    rid = start_run(conn)
+    fail_stale_runs(conn, now=datetime(2026, 10, 22, 12, 0, tzinfo=UTC))
+    assert conn.execute("select finished_at from sync_runs where id=?", (rid,)).fetchone()[0] == \
+        "2026-10-22T12:00:00+00:00"

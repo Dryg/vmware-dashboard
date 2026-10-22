@@ -1,10 +1,10 @@
 """Turn raw vCenter property data (plain dicts, see vcenter.py) into an Inventory. Pure functions."""
 
 import ipaddress
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 
-from vmdash.models import Datastore, Disk, Host, Inventory, Nic, Tag, Vm
+from vmdash.models import Datastore, Disk, Host, Inventory, Nic, Tag, Vm, datastore_name
 
 
 @dataclass
@@ -61,8 +61,12 @@ def useful_ips(ips: list[str]) -> tuple[str, ...]:
     return tuple(sorted(out, key=out.get))
 
 
-def build_nics(devices: list[dict], guest: list[dict], network_names: dict[str, str]) -> tuple[Nic, ...]:
-    """Virtual adapters with the IPs VMware Tools reports for them (matched by device key, else by MAC)."""
+def build_nics(devices: list[dict], guest: list[dict], network_names: dict[str, str],
+               running: bool = True) -> tuple[Nic, ...]:
+    """Virtual adapters with the IPs VMware Tools reports for them (matched by device key, else by MAC).
+
+    vSphere reports an adapter as connected only while the VM runs; otherwise "connect at power on" counts.
+    """
     by_key = {g["device_key"]: g for g in guest}
     by_mac = {g["mac"].lower(): g for g in guest if g.get("mac")}
     nics = []
@@ -71,14 +75,33 @@ def build_nics(devices: list[dict], guest: list[dict], network_names: dict[str, 
         network = (network_names.get(d.get("network") or "") or d.get("network_name")
                    or g.get("network") or "")
         nics.append(Nic(key=d["key"], label=d.get("label") or f"Network adapter {i}", network=network,
-                        mac=d.get("mac") or "", connected=bool(d.get("connected")),
+                        mac=d.get("mac") or "",
+                        connected=bool(d.get("connected") if running else d.get("start_connected")),
                         ips=useful_ips(g.get("ips") or [])))
     return tuple(nics)
 
 
-def _bracket_name(path: str) -> str:
-    m = re.match(r"\[([^\]]*)\]", path or "")
-    return m.group(1) if m else ""
+def keep_last_network(inv: Inventory, previous: dict[str, Vm], previous_at: datetime | None) -> Inventory:
+    """For VMs whose guest reports no IPs now, keep the DNS name and IPs from the previous snapshot.
+
+    net_seen_at records when they were last reported; it is carried along until the guest reports again.
+    """
+    vms = []
+    for vm in inv.vms:
+        prev = previous.get(vm.moref)
+        if prev is None or any(n.ips for n in vm.nics):
+            vms.append(vm)
+            continue
+        by_key = {n.key: n.ips for n in prev.nics}
+        by_mac = {n.mac.lower(): n.ips for n in prev.nics if n.mac}
+        nics = tuple(replace(n, ips=by_key.get(n.key) or by_mac.get(n.mac.lower()) or ()) for n in vm.nics)
+        dns = vm.dns_name or prev.dns_name
+        if dns == vm.dns_name and nics == vm.nics:
+            vms.append(vm)
+            continue
+        seen = prev.net_seen_at or previous_at
+        vms.append(replace(vm, dns_name=dns, nics=nics, net_seen_at=seen))
+    return replace(inv, vms=tuple(vms))
 
 
 def build_inventory(raw: RawInventory, tags: dict[str, list[Tag]]) -> Inventory:
@@ -110,7 +133,7 @@ def build_inventory(raw: RawInventory, tags: dict[str, list[Tag]]) -> Inventory:
             Disk(
                 key=d["key"], label=d.get("label") or f"Disk {i}", capacity_bytes=int(d.get("capacity_bytes") or 0),
                 used_bytes=disk_used_bytes(d["key"], layout),
-                datastore=ds_names.get(d.get("datastore") or "") or _bracket_name(d.get("file_name", "")),
+                datastore=ds_names.get(d.get("datastore") or "") or datastore_name(d.get("file_name", "")),
             )
             for i, d in enumerate(devices.get("disks") or [], 1)
         )
@@ -126,7 +149,8 @@ def build_inventory(raw: RawInventory, tags: dict[str, list[Tag]]) -> Inventory:
             boot_time=v.get("runtime.bootTime"),
             datastore_path=datastore_dir(v.get("config.files.vmPathName") or ""),
             dns_name=v.get("guest.hostName") or "",
-            disks=disks, nics=build_nics(devices.get("nics") or [], v.get("guest.net") or [], net_names),
+            disks=disks, nics=build_nics(devices.get("nics") or [], v.get("guest.net") or [], net_names,
+                                         running=v.get("runtime.powerState") == "poweredOn"),
             tags=tuple(tags.get(moref, ())),
         ))
 

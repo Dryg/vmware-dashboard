@@ -59,18 +59,24 @@ def _hosts(n: int) -> list[Host]:
     return hosts
 
 
-def _nics(i: int, name: str, folder: str, guest_up: bool, connected: bool = True) -> tuple[Nic, ...]:
-    """Deterministic adapters; IPs only when VMware Tools in a running guest would report them."""
-    nets = [NETWORKS.get(folder.split("/")[0], OTHER_NETWORK)]
+# old-crm's last-known IP has since been given to the VM with this index (db-warehouse01): an IP conflict
+CONFLICT_VM, CONFLICT_INDEX = "old-crm", 5
+
+
+def _nics(i: int, name: str, folder: str, has_ips: bool, connected: bool = True) -> tuple[Nic, ...]:
+    """Deterministic adapters; has_ips is False only for templates, which never reported any."""
+    nets, n = [NETWORKS.get(folder.split("/")[0], OTHER_NETWORK)], i
+    if name == CONFLICT_VM:
+        nets, n = [NETWORKS["Production"]], CONFLICT_INDEX
     if name.startswith("db"):
         nets.append(BACKUP_NETWORK)
     nics = []
     for k, (network, prefix) in enumerate(nets):
         ips: tuple[str, ...] = ()
-        if guest_up and connected:
-            ips = (f"{prefix}.{i // 250}.{i % 250 + 4}",)
+        if has_ips:
+            ips = (f"{prefix}.{n // 250}.{n % 250 + 4}",)
             if name.startswith("web"):
-                ips += (f"fd00:{prefix.split('.')[1]}::{i + 4:x}",)
+                ips += (f"fd00:{prefix.split('.')[1]}::{n + 4:x}",)
         nics.append(Nic(4000 + k, f"Network adapter {k + 1}", network, f"00:50:56:{i >> 8:02x}:{i & 255:02x}:{k:02x}",
                         connected, ips))
     return tuple(nics)
@@ -122,9 +128,11 @@ def generate_inventory(hosts: int = 6, vms: int = 80, seed: int = 42, now: datet
             moref=f"vm-{1000 + i}", name=name, host_moref=host.moref if host else None, description=desc,
             folder_path=folder, power_state=power, connection_state=conn, is_template=template,
             vcpu=cpu, memory_mb=ram * 1024, guest_os=os_, boot_time=boot, datastore_path=f"[{ds}] {name}/",
-            dns_name=f"{name}.lab.local" if guest_up else "",
+            dns_name="" if template else f"{name}.lab.local",
+            # VMs whose guest reports nothing now show what was last reported, up to a month ago
+            net_seen_at=None if guest_up or template else now - timedelta(days=i % 30 + 1, hours=i % 24),
             disks=disks([rng.choice([40, 60, 80, 100])] + sizes, ds),
-            nics=_nics(i, name, folder, guest_up, connected=name != "old-crm"),
+            nics=_nics(i, name, folder, has_ips=not template, connected=name != CONFLICT_VM),
             tags=tuple(Tag(c, v) for c, v in sorted(all_tags)),
         )
 
@@ -179,7 +187,7 @@ def generate_db(path: Path, hosts: int = 6, vms: int = 80, seed: int = 42, now: 
             else:
                 finish_run(conn, run_id, "success", host_count=len(inv.hosts), vm_count=len(inv.vms),
                            now=finished)
-        write_snapshot(conn, inv, run_id, 15)
+        write_snapshot(conn, inv, run_id, 15, now=now)
     finally:
         conn.close()
 

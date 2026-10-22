@@ -1,0 +1,52 @@
+[Unit]
+Description=vmdash collector (vCenter inventory -> SQLite)
+Documentation=file:///opt/vmdash/deploy/INSTALL.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=vmdash
+Group=vmdash
+WorkingDirectory=/opt/vmdash
+EnvironmentFile=/etc/vmdash/vmdash.env
+ExecStart=/opt/vmdash/.venv/bin/vmdash-collector
+Restart=on-failure
+RestartSec=10
+# Sandbox. Check with: systemd-analyze security vmdash-collector
+StateDirectory=vmdash
+StateDirectoryMode=0750
+LogsDirectory=vmdash
+LogsDirectoryMode=0750
+UMask=0027
+ReadWritePaths=/var/lib/vmdash
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

@@ -1,16 +1,17 @@
-"""SQLite schema, connections and writes. The collector is the only writer."""
+"""SQLite schema, connections, writes and the inventory reader. The collector is the only writer."""
 
 import logging
 import sqlite3
 import uuid
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from vmdash.models import Inventory
+from vmdash.models import Datastore, Disk, Host, Inventory, Nic, Tag, Vm
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 KEEP_RUNS = 500
 SNAPSHOT_TABLES = ("hosts", "datastores", "vms", "disks", "nics", "tags", "meta")
 
@@ -28,7 +29,8 @@ CREATE TABLE IF NOT EXISTS vms (
     moref TEXT PRIMARY KEY, host_moref TEXT, name TEXT NOT NULL, description TEXT NOT NULL,
     folder_path TEXT NOT NULL, power_state TEXT NOT NULL, connection_state TEXT NOT NULL,
     is_template INTEGER NOT NULL, vcpu INTEGER NOT NULL, memory_mb INTEGER NOT NULL,
-    guest_os TEXT NOT NULL, boot_time TEXT, datastore_path TEXT NOT NULL, dns_name TEXT NOT NULL);
+    guest_os TEXT NOT NULL, boot_time TEXT, datastore_path TEXT NOT NULL,
+    dns_name TEXT NOT NULL, net_seen_at TEXT);
 CREATE TABLE IF NOT EXISTS disks (
     vm_moref TEXT NOT NULL, key INTEGER NOT NULL, label TEXT NOT NULL,
     capacity_bytes INTEGER NOT NULL, used_bytes INTEGER NOT NULL, datastore TEXT NOT NULL);
@@ -49,6 +51,10 @@ def _iso(dt: datetime | None) -> str | None:
 
 def _now(now: datetime | None) -> datetime:
     return now or datetime.now(UTC)
+
+
+def parse_iso(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
 
 
 def connect_rw(path: Path) -> sqlite3.Connection:
@@ -105,13 +111,15 @@ def finish_run(conn: sqlite3.Connection, run_id: int, status: str, error: str | 
     )
 
 
-def fail_stale_runs(conn: sqlite3.Connection) -> int:
+def fail_stale_runs(conn: sqlite3.Connection, now: datetime | None = None) -> int:
     cur = conn.execute(
-        "UPDATE sync_runs SET status='failed', error='collector stopped during sync' WHERE status='running'")
+        "UPDATE sync_runs SET status='failed', error='collector stopped during sync', finished_at=? "
+        "WHERE status='running'", (_iso(_now(now)),))
     return cur.rowcount
 
 
-def write_snapshot(conn: sqlite3.Connection, inv: Inventory, run_id: int, interval_minutes: int) -> None:
+def write_snapshot(conn: sqlite3.Connection, inv: Inventory, run_id: int, interval_minutes: int,
+                   now: datetime | None = None) -> None:
     """Replace the whole snapshot in one transaction."""
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -126,10 +134,10 @@ def write_snapshot(conn: sqlite3.Connection, inv: Inventory, run_id: int, interv
             [(d.moref, d.name, d.capacity_bytes, d.free_bytes) for d in inv.datastores],
         )
         conn.executemany(
-            "INSERT INTO vms VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO vms VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(v.moref, v.host_moref, v.name, v.description, v.folder_path, v.power_state,
               v.connection_state, int(v.is_template), v.vcpu, v.memory_mb, v.guest_os,
-              _iso(v.boot_time), v.datastore_path, v.dns_name) for v in inv.vms],
+              _iso(v.boot_time), v.datastore_path, v.dns_name, _iso(v.net_seen_at)) for v in inv.vms],
         )
         conn.executemany(
             "INSERT INTO disks VALUES (?, ?, ?, ?, ?, ?)",
@@ -149,9 +157,49 @@ def write_snapshot(conn: sqlite3.Connection, inv: Inventory, run_id: int, interv
             "INSERT INTO meta VALUES (?, ?)",
             [("vcenter_host", inv.vcenter_host), ("datacenter", inv.datacenter),
              ("sync_interval_minutes", str(interval_minutes)), ("snapshot_id", str(run_id)),
-             ("snapshot_uid", uuid.uuid4().hex)],
+             ("snapshot_uid", uuid.uuid4().hex), ("snapshot_at", _iso(_now(now)))],
         )
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+
+
+def read_inventory(conn: sqlite3.Connection) -> Inventory:
+    meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+    disks: dict[str, list[Disk]] = defaultdict(list)
+    for r in conn.execute("SELECT * FROM disks ORDER BY rowid"):
+        disks[r["vm_moref"]].append(Disk(r["key"], r["label"], r["capacity_bytes"], r["used_bytes"], r["datastore"]))
+    nics: dict[str, list[Nic]] = defaultdict(list)
+    for r in conn.execute("SELECT * FROM nics ORDER BY rowid"):
+        nics[r["vm_moref"]].append(Nic(r["key"], r["label"], r["network"], r["mac"], bool(r["connected"]),
+                                       tuple(r["ips"].split())))
+    tags: dict[str, list[Tag]] = defaultdict(list)
+    for r in conn.execute("SELECT * FROM tags ORDER BY rowid"):
+        tags[r["vm_moref"]].append(Tag(r["category"], r["name"]))
+    hosts = tuple(
+        Host(r["moref"], r["name"], r["cluster"], r["connection_state"], bool(r["in_maintenance"]))
+        for r in conn.execute("SELECT * FROM hosts ORDER BY rowid")
+    )
+    datastores = tuple(
+        Datastore(r["moref"], r["name"], r["capacity_bytes"], r["free_bytes"])
+        for r in conn.execute("SELECT * FROM datastores ORDER BY rowid")
+    )
+    vms = tuple(
+        Vm(
+            moref=r["moref"], name=r["name"], host_moref=r["host_moref"], description=r["description"],
+            folder_path=r["folder_path"], power_state=r["power_state"], connection_state=r["connection_state"],
+            is_template=bool(r["is_template"]), vcpu=r["vcpu"], memory_mb=r["memory_mb"], guest_os=r["guest_os"],
+            boot_time=parse_iso(r["boot_time"]), datastore_path=r["datastore_path"], dns_name=r["dns_name"],
+            net_seen_at=parse_iso(r["net_seen_at"]),
+            disks=tuple(disks.get(r["moref"], ())), nics=tuple(nics.get(r["moref"], ())),
+            tags=tuple(tags.get(r["moref"], ())),
+        )
+        for r in conn.execute("SELECT * FROM vms ORDER BY rowid")
+    )
+    return Inventory(meta.get("vcenter_host", ""), meta.get("datacenter", ""), hosts, datastores, vms)
+
+
+def read_snapshot_time(conn: sqlite3.Connection) -> datetime | None:
+    row = conn.execute("SELECT value FROM meta WHERE key='snapshot_at'").fetchone()
+    return parse_iso(row[0]) if row else None

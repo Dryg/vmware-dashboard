@@ -166,7 +166,7 @@ def test_status_json_requires_auth(client):
 def test_healthz_no_auth(client):
     r = client.get("/healthz")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "last_success_age_s": 0}
+    assert r.json() == {"ok": True, "last_success_age_s": 0, "last_run": "success"}
 
 
 def test_healthz_stale_503(mock_db):
@@ -206,7 +206,7 @@ def test_static_sizes():
 
 def test_static_cache_headers(client):
     page = get(client).text
-    assert "/static/style.css?v=" in page
+    assert 'href="static/style.css?v=' in page  # relative: works under a reverse-proxy path prefix
     r = client.get("/static/style.css")
     assert r.status_code == 200
     assert "max-age=31536000" in r.headers["cache-control"]
@@ -233,7 +233,7 @@ def test_app_js_size():
 
 
 def test_page_loads_app_js(client):
-    assert '<script src="/static/app.js?v=' in get(client).text
+    assert '<script src="static/app.js?v=' in get(client).text
 
 
 @pytest.mark.parametrize("make_bad", [
@@ -269,3 +269,51 @@ def test_unicode_digit_names_render(tmp_path):
     write_snapshot(conn, make_inventory(vms=[make_vm("web1²"), make_vm("srv-01①")]), rid, 15)
     conn.close()
     assert get(make_client(tmp_path / "u.db")).status_code == 200
+
+
+def test_last_seen_and_ip_conflict_render(tmp_path):
+    generate_db(tmp_path / "c.db", now=NOW)
+    text = get(make_client(tmp_path / "c.db")).text
+    assert '<td class="net old"><div class="dns">old-crm.lab.local</div>' in text
+    assert 'last seen ' in text
+    assert ('<span class="ip dup" title="Also on: db-warehouse01">10.10.0.9</span>'
+            '<span class="dupn">also on db-warehouse01</span>') in text
+
+
+def test_read_error_keeps_last_data(tmp_path, monkeypatch):
+    from vmdash.web import app as app_module
+    generate_db(tmp_path / "e.db", vms=10, now=NOW)
+    c = make_client(tmp_path / "e.db")
+    uid = get(c, "/status.json").json()["snapshot_uid"]
+    assert "esx01.lab.local" in get(c).text
+
+    def locked(_conn):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(app_module, "read_status", locked)
+    assert get(c, "/status.json").json()["snapshot_uid"] == uid  # open pages do not reload into an empty page
+    assert "esx01.lab.local" in get(c).text
+
+
+def test_healthz_reports_failed_last_run_but_stays_200(tmp_path):
+    generate_db(tmp_path / "h.db", now=NOW)
+    conn = connect_rw(tmp_path / "h.db")
+    finish_run(conn, start_run(conn, now=NOW), "failed", error="x", now=NOW + timedelta(minutes=1))
+    conn.close()
+    r = make_client(tmp_path / "h.db", now=NOW + timedelta(minutes=2)).get("/healthz")
+    assert (r.status_code, r.json()["ok"], r.json()["last_run"]) == (200, True, "failed")
+
+
+def test_security_headers_and_csp_allows_the_inline_script(client):
+    import base64
+    import hashlib
+    import re
+    r = get(client)
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert r.headers["cache-control"] == "no-store"
+    assert get(client, "/status.json").headers["cache-control"] == "no-store"
+    inline = re.findall(r"<script>(.*?)</script>", r.text)
+    assert len(inline) == 1
+    digest = base64.b64encode(hashlib.sha256(inline[0].encode()).digest()).decode()
+    assert f"'sha256-{digest}'" in r.headers["content-security-policy"]
+    assert "max-age=31536000" in client.get("/static/app.js").headers["cache-control"]  # static keeps its caching

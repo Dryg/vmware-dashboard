@@ -30,7 +30,7 @@ border-radius:3px;padding:0 5px;pointer-events:none}
 .sync .l2{color:var(--muted);font-size:12px}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--off)}
 .dot.ok,.sync[data-state="ok"] .dot{background:var(--ok)}
-.dot.warn,.sync[data-state="stale"] .dot,.sync[data-state="running"] .dot{background:var(--warn)}
+.dot.warn,.sync[data-state="stale"] .dot,.sync[data-state="partial"] .dot,.sync[data-state="running"] .dot{background:var(--warn)}
 .dot.bad,.sync[data-state="failed"] .dot{background:var(--bad)}
 .sync[data-state="running"] .dot{animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.3}}
@@ -55,7 +55,7 @@ background:color-mix(in srgb,var(--accent) 10%,var(--surface));font-weight:600}
 
 .banner{padding-block:8px;font-size:13px;border-bottom:1px solid var(--line)}
 .banner.failed{background:color-mix(in srgb,var(--bad) 11%,var(--surface))}
-.banner.stale{background:color-mix(in srgb,var(--warn) 13%,var(--surface))}
+.banner.stale,.banner.partial{background:color-mix(in srgb,var(--warn) 13%,var(--surface))}
 .summary{padding-block:10px;color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:4px 16px}
 .summary b{color:var(--fg);font-weight:600}
 
@@ -101,6 +101,9 @@ padding:0 6px}
 .nic{display:flex;flex-wrap:wrap;gap:0 8px;font-size:12.5px;line-height:1.7}
 .nn{color:var(--muted);white-space:nowrap}
 .ip{font-family:var(--mono);font-size:12px;white-space:nowrap}
+.net.old .dns,.net.old .ip{color:var(--muted)}
+.ip.dup,.dupn{color:var(--bad);font-weight:600}
+.dupn{font-size:12px;white-space:nowrap}
 .loc{font-family:var(--mono);font-size:12px;white-space:nowrap}
 .dk{display:grid;grid-template-columns:48px 62px 54px auto;gap:8px;align-items:center;font-size:12.5px;line-height:1.7}
 .dl{color:var(--muted)}

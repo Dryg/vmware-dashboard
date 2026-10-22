@@ -2,10 +2,10 @@ from datetime import timedelta
 
 from factories import NOW, make_host, make_inventory, make_vm
 
-from vmdash.db import connect_ro, connect_rw, finish_run, start_run, write_snapshot
+from vmdash.db import connect_ro, connect_rw, finish_run, read_inventory, start_run, write_snapshot
 from vmdash.mock.generate import generate_db
 from vmdash.models import Nic, Tag
-from vmdash.web.queries import read_inventory, read_status
+from vmdash.web.queries import read_status
 
 
 def test_read_inventory_round_trip(tmp_path):
@@ -49,3 +49,13 @@ def test_read_status_empty_db(tmp_path):
     connect_rw(tmp_path / "a.db").close()
     st = read_status(connect_ro(tmp_path / "a.db"))
     assert (st.snapshot_id, st.last_run, st.last_success_at, st.interval_minutes) == (None, None, None, 15)
+
+
+def test_last_success_survives_run_pruning(tmp_path):
+    conn = connect_rw(tmp_path / "a.db")
+    rid = start_run(conn, now=NOW)
+    finish_run(conn, rid, "success", now=NOW)
+    write_snapshot(conn, make_inventory(), rid, 15, now=NOW)
+    conn.execute("delete from sync_runs where status = 'success'")  # pruned after > 500 failed runs
+    finish_run(conn, start_run(conn), "failed", error="x")
+    assert read_status(conn).last_success_at == NOW

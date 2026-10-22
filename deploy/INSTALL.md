@@ -9,8 +9,9 @@ Requirements: Linux with systemd, [uv](https://docs.astral.sh/uv/), network acce
 
 ## 1. vCenter account
 
-Create a service account (e.g. `svc-vmdash@vsphere.local`) and give it the built-in **Read-only** role
-on the vCenter root object, propagated to children. Tags are read through the same account.
+Create a service account (e.g. `svc-vmdash@vsphere.local`) with the built-in **Read-only** role as a
+**global permission**, propagated to children. Step by step, including the password-expiry trap:
+[README: Read-only vCenter account](../README.md#read-only-vcenter-account).
 
 ## 2. Install
 
@@ -35,26 +36,20 @@ sudo -u vmdash env UV_CACHE_DIR=/opt/vmdash/.uv-cache UV_PYTHON_INSTALL_DIR=/opt
 ## 3. Configure
 
 ```bash
-sudo install -m 600 -o vmdash -g vmdash /opt/vmdash/.env.example /etc/vmdash/vmdash.env
+sudo install -m 600 -o vmdash -g vmdash /opt/vmdash/examples/vmdash.env /etc/vmdash/vmdash.env
 sudo -e /etc/vmdash/vmdash.env
 ```
+
+Every setting is described in `/opt/vmdash/.env.example`.
 
 Do not leave a `.env` file in `/opt/vmdash`: the services run there and would read it for any
 setting missing from `/etc/vmdash/vmdash.env`.
 
-Set at least:
+Set at least `VCENTER_HOST`, `VCENTER_USER`, `VCENTER_PASSWORD` and `WEB_PASSWORD`.
 
-```
-VCENTER_HOST=vcsa01.example.local
-VCENTER_USER=svc-vmdash@vsphere.local
-VCENTER_PASSWORD=...
-SQLITE_PATH=/var/lib/vmdash/vmdash.db
-WEB_USER=admin
-WEB_PASSWORD=...
-```
-
-Basic auth sends the password with every request. Use TLS: either set `WEB_SSL_CERT` / `WEB_SSL_KEY`
-(files readable by the `vmdash` user) or put the site behind a reverse proxy that terminates TLS.
+The example listens on `127.0.0.1:8080` for nginx (step 7). Basic auth sends the password with every
+request, so without a reverse proxy set `WEB_HOST=0.0.0.0` and `WEB_SSL_CERT` / `WEB_SSL_KEY`
+(files readable by the `vmdash` user) instead.
 
 ## 4. Test one sync
 
@@ -67,7 +62,7 @@ Exit code 0 means the snapshot was written (`partial` = VMs written but tags fai
 ## 5. Start the services
 
 ```bash
-sudo cp /opt/vmdash/deploy/systemd/vmdash-*.service /etc/systemd/system/
+sudo cp /opt/vmdash/examples/systemd/vmdash-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now vmdash-collector vmdash-web
 ```
@@ -80,7 +75,37 @@ curl -s http://localhost:8080/healthz      # {"ok":true,"last_success_age_s":42}
 ```
 
 `/healthz` needs no login and returns HTTP 503 when the last successful sync is older than
-3 × `SYNC_INTERVAL_MINUTES`, so it can be used by monitoring.
+3 × `SYNC_INTERVAL_MINUTES`. It also returns `"last_run"`: alert on `"failed"` to hear about the first failed
+sync, warn on `"partial"` (VMs synced, tags could not be read).
+
+## Security notes
+
+- Both units run sandboxed (no capabilities, read-only system, private /tmp and devices, syscall filter);
+  `systemd-analyze security vmdash-web` should report about 1.1 OK. The database is readable only by `vmdash`.
+- The web app sends a strict Content-Security-Policy, `X-Frame-Options: DENY`, `nosniff`, `no-referrer` and
+  `Cache-Control: no-store` on pages, and refuses to start while `WEB_PASSWORD` is still `change-me`.
+- Failed logins show as `401` in `journalctl -u vmdash-web` and in the nginx access log (for fail2ban);
+  the nginx examples also rate-limit each client to 5 requests/s.
+- `VCENTER_VERIFY_SSL=false` logs a warning at every start. Keep verification on and point
+  `VCENTER_CA_FILE` at the vCenter CA instead: download `https://<vcenter>/certs/download.zip`, take the
+  `.crt` file(s) from `certs/lin/`, `cat` them into `/etc/vmdash/vcenter-ca.pem` (readable by `vmdash`).
+
+## 7. nginx reverse proxy (TLS)
+
+Pick one example, change `server_name` and the certificate paths:
+
+- `examples/nginx/vmdash-root.conf`: the dashboard is the whole site, `https://vmdash.example.com/`.
+- `examples/nginx/vmdash-subpath.conf`: the dashboard under a custom path on a shared host,
+  `https://intranet.example.com/vmdash/`. To add it to an existing server, copy its two `location` blocks.
+
+```bash
+sudo cp /opt/vmdash/examples/nginx/vmdash-root.conf /etc/nginx/conf.d/vmdash.conf
+sudo -e /etc/nginx/conf.d/vmdash.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+On SELinux systems (RHEL, Rocky, Fedora) nginx may not connect to the app until you run
+`sudo setsebool -P httpd_can_network_connect 1`.
 
 ## Updating
 
