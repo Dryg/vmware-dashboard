@@ -93,3 +93,16 @@ podman run -d --rm -p 8989:8989 docker.io/vmware/vcsim -l 0.0.0.0:8989
 printf 'VCENTER_HOST=localhost:8989\nVCENTER_USER=user\nVCENTER_PASSWORD=pass\nVCENTER_VERIFY_SSL=false\n' > sim.env
 uv run vmdash-collector --once --env-file sim.env --db sim.db   # "partial": vcsim has no tagging API
 ```
+
+Notes for AI coding assistants working on this repository are in [CLAUDE.md](CLAUDE.md).
+
+## AI sidenote
+
+This project was built with AI assistance. The design, code, tests and documentation were written by Claude
+(Anthropic) through Claude Code, working from the maintainer's requirements; every commit carries a
+`Co-Authored-By: Claude` trailer. The design spec and implementation plan it worked from are in
+[docs/superpowers/](docs/superpowers/).
+
+Changes were checked with the test suite, ruff, the vcsim simulator, headless-browser screenshots and real
+nginx and systemd test runs. None of that replaces a run against your own vCenter: test it there before you
+rely on it, and treat it like any other third-party code that gets a vCenter account.
