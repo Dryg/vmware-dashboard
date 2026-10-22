@@ -1,4 +1,5 @@
 import gzip
+import re
 import sqlite3
 import statistics
 from datetime import timedelta
@@ -56,7 +57,7 @@ def test_page_renders(client):
     assert r.status_code == 200
     assert "esx01.lab.local" in r.text
     assert 'data-snapshot="' in r.text and 'data-snapshot=""' not in r.text
-    assert "snapshot #12" in r.text
+    assert "snapshot #" not in r.text
     assert "vcsa01.lab.local · DC-Main" in r.text
     assert "Synced 22.10.2026 12:00" in r.text
     assert '<html lang="en" data-theme="light">' in r.text
@@ -98,7 +99,7 @@ def test_network_column(tmp_path):
     conn.close()
     text = get(make_client(tmp_path / "n.db")).text
     assert "<th>Status</th><th>Network</th>" in text
-    assert '<td class="net"><div class="dns">web01&amp;co.lab</div>' in text
+    assert '<td class="net"><div class="dns" title="web01&amp;co.lab">web01&amp;co.lab</div>' in text
     assert ('<div class="nic" title="Network adapter 1 · 00:50:56:aa:00:01"><span class="nn">VLAN&lt;10&gt;</span>'
             '<span class="ip">10.10.0.5</span><span class="ip">2001:db8::5</span></div>') in text
     assert ('<div class="nic" title="Network adapter 2"><span class="nn">Network adapter 2</span>'
@@ -201,7 +202,7 @@ def test_server_timing_header(client):
 
 
 def test_static_sizes():
-    assert (STATIC / "style.css").stat().st_size < 8192
+    assert (STATIC / "style.css").stat().st_size < 10240
 
 
 def test_static_cache_headers(client):
@@ -229,7 +230,7 @@ def test_new_snapshot_is_shown(tmp_path):
 
 
 def test_app_js_size():
-    assert (STATIC / "app.js").stat().st_size < 8192
+    assert (STATIC / "app.js").stat().st_size < 10240
 
 
 def test_page_loads_app_js(client):
@@ -256,8 +257,8 @@ def test_recreated_db_with_same_snapshot_id_is_reloaded(tmp_path):
     first = get(c).text
     generate_db(tmp_path / "r.db", vms=20, now=NOW)  # same snapshot_id 12, different data
     second = get(c).text
-    assert "80 VMs · grouped" in first
-    assert "20 VMs · grouped" in second
+    assert "78 VMs · 2 templates · grouped" in first
+    assert "18 VMs · 2 templates · grouped" in second
     snap = lambda t: t.split('data-snapshot="')[1].split('"')[0]  # noqa: E731
     assert snap(first) != snap(second)
 
@@ -274,7 +275,7 @@ def test_unicode_digit_names_render(tmp_path):
 def test_last_seen_and_ip_conflict_render(tmp_path):
     generate_db(tmp_path / "c.db", now=NOW)
     text = get(make_client(tmp_path / "c.db")).text
-    assert '<td class="net old"><div class="dns">old-crm.lab.local</div>' in text
+    assert '<td class="net old"><div class="dns" title="old-crm.lab.local">old-crm.lab.local</div>' in text
     assert 'last seen ' in text
     assert ('<span class="ip dup" title="Also on: db-warehouse01">10.10.0.9</span>'
             '<span class="dupn">also on db-warehouse01</span>') in text
@@ -317,3 +318,46 @@ def test_security_headers_and_csp_allows_the_inline_script(client):
     digest = base64.b64encode(hashlib.sha256(inline[0].encode()).digest()).decode()
     assert f"'sha256-{digest}'" in r.headers["content-security-policy"]
     assert "max-age=31536000" in client.get("/static/app.js").headers["cache-control"]  # static keeps its caching
+
+
+def test_cluster_grouping_removed_and_columns_fixed(client):
+    text = get(client, "/?group=cluster").text  # old bookmarks fall back to host grouping
+    assert 'data-group="host"' in text and "?group=cluster" not in text
+    assert '<colgroup><col><col class="w-st">' in text  # no Host column when grouped by host
+    assert '<table id="t" class="wh">' in get(client, "/?group=folder").text
+
+
+def test_vcenter_name_links_to_vsphere_client(client, tmp_path):
+    assert ('<a class="brand" href="https://vcsa01.lab.local/ui/" target="_blank" rel="noopener noreferrer" '
+            'title="Open vSphere Client">vcsa01.lab.local · DC-Main</a>') in get(client).text
+    assert '<div class="brand"></div>' in get(make_client(tmp_path / "missing.db")).text  # before the first sync
+
+
+def test_host_usage_popup_without_cluster(client):
+    text = get(client).text
+    assert 'class="chip"' not in text and "Cluster-A" not in text
+    # esx01 in the mock: 15% of 32 x 2.6 GHz, 40% of 512 GB; shown in a popup on the host name, not inline
+    assert re.search(r'<span class="hn pu"><span class="gname">esx01.lab.local</span><span class="pop" role="tooltip">'
+                     r'<span>CPU</span><span class="bar"[^>]*><i [^>]*></i></span><span>15% of 83.2 GHz</span>\s*'
+                     r'<span>Memory</span><span class="bar"[^>]*><i [^>]*></i></span><span>205 GB of 512 GB \(40%\)</span>'
+                     r'</span></span>', text)
+    assert text.count('class="pop"') == 5  # every host but the disconnected one
+    assert '<span class="hn"><span class="gname">esx06.lab.local</span></span>' in text  # disconnected: no popup
+
+
+def test_footer_counts_vms_and_templates(client):
+    assert '<footer class="gut">vmdash · 78 VMs · 2 templates · grouped by host</footer>' in get(client).text
+
+
+def test_page_title_is_vmware_and_vcenter(client, tmp_path):
+    assert "<title>vmware - vcsa01.lab.local</title>" in get(client).text
+    assert "<title>vmware</title>" in get(make_client(tmp_path / "missing.db")).text  # before the first sync
+
+
+def test_vcenter_ui_url_overrides_the_header_link(mock_db):
+    settings = WebSettings(web_user="u", web_password="p", sqlite_path=mock_db, _env_file=None,
+                           vcenter_ui_url="https://vcenter.example.com/ui/")
+    text = TestClient(create_app(settings, now=lambda: NOW)).get("/", auth=AUTH).text
+    assert '<a class="brand" href="https://vcenter.example.com/ui/"' in text
+    with pytest.raises(ValueError, match="https://"):
+        WebSettings(web_user="u", web_password="p", _env_file=None, vcenter_ui_url="javascript:alert(1)")

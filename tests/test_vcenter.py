@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 from pyVmomi import vim
 
-from vmdash.collector.vcenter import plain, to_devices, to_disks, to_guest_nics, to_layout, to_nics
+from vmdash.collector.vcenter import plain, to_devices, to_disks, to_guest_nics, to_nics
 
 GB = 2**30
 
@@ -60,19 +60,6 @@ def test_to_guest_nics():
         {"device_key": -1, "network": "", "mac": "", "ips": []},
     ]
     assert to_guest_nics(None) == []
-
-
-def test_to_layout_maps_files_and_chains():
-    layout = vim.vm.FileLayoutEx(
-        file=[vim.vm.FileLayoutEx.FileInfo(key=1, size=100, name="a.vmdk", type="diskDescriptor"),
-              vim.vm.FileLayoutEx.FileInfo(key=2, size=900, name="a-flat.vmdk", type="diskExtent")],
-        disk=[vim.vm.FileLayoutEx.DiskLayout(key=2000, chain=[vim.vm.FileLayoutEx.DiskUnit(fileKey=[1, 2])])],
-    )
-    assert to_layout(layout) == {"files": {1: 100, 2: 900}, "disks": {2000: [1, 2]}}
-
-
-def test_to_layout_none():
-    assert to_layout(None) is None
 
 
 def test_plain_converts_managed_objects_to_moref():

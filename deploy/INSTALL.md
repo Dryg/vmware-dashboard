@@ -109,14 +109,5 @@ On SELinux systems (RHEL, Rocky, Fedora) nginx may not connect to the app until 
 
 ## Updating
 
-```bash
-sudo systemctl stop vmdash-web vmdash-collector
-git archive HEAD | sudo tar -x -C /opt/vmdash      # from the updated checkout
-sudo chown -R vmdash:vmdash /opt/vmdash
-sudo -u vmdash env UV_CACHE_DIR=/opt/vmdash/.uv-cache UV_PYTHON_INSTALL_DIR=/opt/vmdash/.python \
-    "$(command -v uv)" sync --frozen --no-dev --directory /opt/vmdash
-sudo systemctl start vmdash-collector vmdash-web
-```
-
-The database holds only the latest snapshot. If a new version changes the schema, the collector recreates
-the tables on its next sync; the page shows "No sync yet" until then.
+Step by step, with or without git, including a backup and a rollback:
+[README: Updating a server](../README.md#updating-a-server).

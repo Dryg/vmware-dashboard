@@ -5,7 +5,6 @@ from vmdash.collector.transform import (
     build_inventory,
     build_nics,
     datastore_dir,
-    disk_used_bytes,
     folder_path,
     keep_last_network,
     useful_ips,
@@ -21,18 +20,16 @@ FOLDERS = {
 }
 
 
-def raw(vms=None, hosts=None, compute=None, folders=None):
+def raw(vms=None, hosts=None, folders=None):
     return RawInventory(
         vcenter_host="vcsa01.lab.local",
         datacenters={"datacenter-2": {"name": "DC-B", "vmFolder": "group-v9"},
                      "datacenter-1": {"name": "DC-Main", "vmFolder": "group-v1"}},
         folders=folders if folders is not None else FOLDERS,
-        compute=compute if compute is not None else {"domain-c1": {"name": "Cluster-A", "is_cluster": True},
-                                                     "domain-s2": {"name": "esx09.lab.local", "is_cluster": False}},
         hosts=hosts if hosts is not None else {
-            "host-1": {"name": "esx01.lab.local", "parent": "domain-c1", "runtime.connectionState": "connected",
+            "host-1": {"name": "esx01.lab.local", "runtime.connectionState": "connected",
                        "runtime.inMaintenanceMode": False},
-            "host-9": {"name": "esx09.lab.local", "parent": "domain-s2", "runtime.connectionState": "connected",
+            "host-9": {"name": "esx09.lab.local", "runtime.connectionState": "connected",
                        "runtime.inMaintenanceMode": True},
         },
         datastores={"datastore-1": {"name": "ds-ssd01", "summary.capacity": 2048 * GB, "summary.freeSpace": 900 * GB}},
@@ -59,7 +56,6 @@ FULL_VM = {
     "config.files.vmPathName": "[ds-ssd01] web01/web01.vmx", "config.guestFullName": "Ubuntu Linux (64-bit)",
     "guest.guestFullName": "Ubuntu 24.04.1 LTS", "runtime.powerState": "poweredOn",
     "runtime.connectionState": "connected", "runtime.host": "host-1", "runtime.bootTime": BOOT,
-    "layoutEx": {"files": {1: 30 * GB, 2: 1 * GB, 3: 80 * GB, 4: 5}, "disks": {2000: [1, 2], 2001: [3]}},
 }
 
 
@@ -81,22 +77,11 @@ def test_folder_path_stops_on_cycle_or_unknown_parent():
     assert folder_path("x", {}, set()) == ""
 
 
-def test_disk_used_includes_snapshot_chain():
-    layout = {"files": {1: 100, 2: 50, 3: 7}, "disks": {2000: [1, 2]}}
-    assert disk_used_bytes(2000, layout) == 150
-    assert disk_used_bytes(2001, layout) == 0
-    assert disk_used_bytes(2000, None) == 0
-
-
-def test_disk_used_ignores_unknown_file_keys():
-    assert disk_used_bytes(2000, {"files": {1: 10}, "disks": {2000: [1, 99]}}) == 10
-
-
 def test_build_inventory_full_vm():
     inv = build_inventory(raw(vms={"vm-1": FULL_VM}), {"vm-1": [Tag("env", "prod")]})
     assert inv.vcenter_host == "vcsa01.lab.local"
     assert inv.datacenter == "DC-B, DC-Main"
-    assert Host("host-1", "esx01.lab.local", "Cluster-A", "connected", False) in inv.hosts
+    assert Host("host-1", "esx01.lab.local", "connected", False) in inv.hosts
     assert inv.datastores == (Datastore("datastore-1", "ds-ssd01", 2048 * GB, 900 * GB),)
     (vm,) = inv.vms
     assert (vm.moref, vm.name, vm.host_moref, vm.description, vm.folder_path) == (
@@ -104,8 +89,8 @@ def test_build_inventory_full_vm():
     assert (vm.power_state, vm.connection_state, vm.is_template, vm.vcpu, vm.memory_mb) == (
         "poweredOn", "connected", False, 4, 16384)
     assert (vm.guest_os, vm.boot_time, vm.datastore_path) == ("Ubuntu 24.04.1 LTS", BOOT, "[ds-ssd01] web01/")
-    assert vm.disks == (Disk(2000, "Hard disk 1", 60 * GB, 31 * GB, "ds-ssd01"),
-                        Disk(2001, "Hard disk 2", 200 * GB, 80 * GB, "ds-ssd01"))
+    assert vm.disks == (Disk(2000, "Hard disk 1", 60 * GB, "ds-ssd01"),
+                        Disk(2001, "Hard disk 2", 200 * GB, "ds-ssd01"))
     assert vm.tags == (Tag("env", "prod"),)
     assert vm.dns_name == "web01.lab.local"
     assert vm.nics == (Nic(4000, "Network adapter 1", "VLAN10-Prod", "00:50:56:aa:00:01", True, ("10.10.0.5",)),)
@@ -116,9 +101,9 @@ def test_guest_os_fallback():
     assert build_inventory(raw(vms={"vm-1": vm}), {}).vms[0].guest_os == "Ubuntu Linux (64-bit)"
 
 
-def test_standalone_host_has_no_cluster():
+def test_host_in_maintenance():
     inv = build_inventory(raw(), {})
-    assert Host("host-9", "esx09.lab.local", None, "connected", True) in inv.hosts
+    assert Host("host-9", "esx09.lab.local", "connected", True) in inv.hosts
 
 
 def test_disk_datastore_falls_back_to_file_name():
@@ -210,3 +195,14 @@ def test_keep_last_network_live_data_wins():
     assert keep_last_network(make_inventory(vms=[live]), {prev.moref: prev}, SEEN).vms[0] == live
     new = vm_with()  # no previous data: unchanged, not marked as last-seen
     assert keep_last_network(make_inventory(vms=[new]), {}, SEEN).vms[0] == new
+
+
+def test_host_usage():
+    host = {"name": "esx01", "runtime.connectionState": "connected",
+            "summary.quickStats.overallCpuUsage": 20800, "summary.quickStats.overallMemoryUsage": 262144,
+            "summary.hardware.cpuMhz": 2600, "summary.hardware.numCpuCores": 32,
+            "summary.hardware.memorySize": 512 * GB}
+    (h,) = build_inventory(raw(hosts={"host-1": host}), {}).hosts
+    assert (h.cpu_used_mhz, h.cpu_total_mhz, h.mem_used_bytes, h.mem_total_bytes) == (20800, 83200, 256 * GB, 512 * GB)
+    (h,) = build_inventory(raw(hosts={"host-1": {"name": "esx01", "runtime.connectionState": "disconnected"}}), {}).hosts
+    assert (h.cpu_used_mhz, h.cpu_total_mhz, h.mem_used_bytes, h.mem_total_bytes) == (0, 0, 0, 0)

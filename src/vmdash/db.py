@@ -11,7 +11,11 @@ from vmdash.models import Datastore, Disk, Host, Inventory, Nic, Tag, Vm
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
+# Upgrading from these versions drops only the listed tables (recreated with the new columns below). The tables a
+# sync reads back from the previous snapshot (vms, nics, tags: last-known IPs/DNS, fallback tags), meta and the run
+# history survive. Any other version recreates everything.
+UPGRADES = {3: ("hosts", "disks"), 4: ("hosts",)}
 KEEP_RUNS = 500
 SNAPSHOT_TABLES = ("hosts", "datastores", "vms", "disks", "nics", "tags", "meta")
 
@@ -21,8 +25,10 @@ CREATE TABLE IF NOT EXISTS sync_runs (
     status TEXT NOT NULL, error TEXT, host_count INTEGER NOT NULL DEFAULT 0,
     vm_count INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS hosts (
-    moref TEXT PRIMARY KEY, name TEXT NOT NULL, cluster TEXT,
-    connection_state TEXT NOT NULL, in_maintenance INTEGER NOT NULL);
+    moref TEXT PRIMARY KEY, name TEXT NOT NULL,
+    connection_state TEXT NOT NULL, in_maintenance INTEGER NOT NULL,
+    cpu_used_mhz INTEGER NOT NULL, cpu_total_mhz INTEGER NOT NULL,
+    mem_used_bytes INTEGER NOT NULL, mem_total_bytes INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS datastores (
     moref TEXT PRIMARY KEY, name TEXT NOT NULL, capacity_bytes INTEGER NOT NULL, free_bytes INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS vms (
@@ -33,7 +39,7 @@ CREATE TABLE IF NOT EXISTS vms (
     dns_name TEXT NOT NULL, net_seen_at TEXT);
 CREATE TABLE IF NOT EXISTS disks (
     vm_moref TEXT NOT NULL, key INTEGER NOT NULL, label TEXT NOT NULL,
-    capacity_bytes INTEGER NOT NULL, used_bytes INTEGER NOT NULL, datastore TEXT NOT NULL);
+    capacity_bytes INTEGER NOT NULL, datastore TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS nics (
     vm_moref TEXT NOT NULL, key INTEGER NOT NULL, label TEXT NOT NULL, network TEXT NOT NULL,
     mac TEXT NOT NULL, connected INTEGER NOT NULL, ips TEXT NOT NULL);
@@ -58,13 +64,17 @@ def parse_iso(value: str | None) -> datetime | None:
 
 
 def connect_rw(path: Path) -> sqlite3.Connection:
-    """Open for writing; create the schema, recreating it if the stored version is unknown."""
+    """Open for writing; create or upgrade the schema (see UPGRADES), recreating it if the version is unknown."""
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, isolation_level=None, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (0, SCHEMA_VERSION):
+    if version in UPGRADES:
+        log.info("upgrading schema %s -> %s, recreating %s", version, SCHEMA_VERSION, ", ".join(UPGRADES[version]))
+        for t in UPGRADES[version]:
+            conn.execute(f'DROP TABLE IF EXISTS "{t}"')
+    elif version not in (0, SCHEMA_VERSION):
         log.warning("schema version %s != %s, recreating database tables", version, SCHEMA_VERSION)
         tables = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
@@ -126,8 +136,9 @@ def write_snapshot(conn: sqlite3.Connection, inv: Inventory, run_id: int, interv
         for t in SNAPSHOT_TABLES:
             conn.execute(f"DELETE FROM {t}")
         conn.executemany(
-            "INSERT INTO hosts VALUES (?, ?, ?, ?, ?)",
-            [(h.moref, h.name, h.cluster, h.connection_state, int(h.in_maintenance)) for h in inv.hosts],
+            "INSERT INTO hosts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [(h.moref, h.name, h.connection_state, int(h.in_maintenance), h.cpu_used_mhz,
+              h.cpu_total_mhz, h.mem_used_bytes, h.mem_total_bytes) for h in inv.hosts],
         )
         conn.executemany(
             "INSERT INTO datastores VALUES (?, ?, ?, ?)",
@@ -140,8 +151,8 @@ def write_snapshot(conn: sqlite3.Connection, inv: Inventory, run_id: int, interv
               _iso(v.boot_time), v.datastore_path, v.dns_name, _iso(v.net_seen_at)) for v in inv.vms],
         )
         conn.executemany(
-            "INSERT INTO disks VALUES (?, ?, ?, ?, ?, ?)",
-            [(v.moref, d.key, d.label, d.capacity_bytes, d.used_bytes, d.datastore)
+            "INSERT INTO disks VALUES (?, ?, ?, ?, ?)",
+            [(v.moref, d.key, d.label, d.capacity_bytes, d.datastore)
              for v in inv.vms for d in v.disks],
         )
         conn.executemany(
@@ -169,7 +180,7 @@ def read_inventory(conn: sqlite3.Connection) -> Inventory:
     meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
     disks: dict[str, list[Disk]] = defaultdict(list)
     for r in conn.execute("SELECT * FROM disks ORDER BY rowid"):
-        disks[r["vm_moref"]].append(Disk(r["key"], r["label"], r["capacity_bytes"], r["used_bytes"], r["datastore"]))
+        disks[r["vm_moref"]].append(Disk(r["key"], r["label"], r["capacity_bytes"], r["datastore"]))
     nics: dict[str, list[Nic]] = defaultdict(list)
     for r in conn.execute("SELECT * FROM nics ORDER BY rowid"):
         nics[r["vm_moref"]].append(Nic(r["key"], r["label"], r["network"], r["mac"], bool(r["connected"]),
@@ -178,7 +189,8 @@ def read_inventory(conn: sqlite3.Connection) -> Inventory:
     for r in conn.execute("SELECT * FROM tags ORDER BY rowid"):
         tags[r["vm_moref"]].append(Tag(r["category"], r["name"]))
     hosts = tuple(
-        Host(r["moref"], r["name"], r["cluster"], r["connection_state"], bool(r["in_maintenance"]))
+        Host(r["moref"], r["name"], r["connection_state"], bool(r["in_maintenance"]),
+             r["cpu_used_mhz"], r["cpu_total_mhz"], r["mem_used_bytes"], r["mem_total_bytes"])
         for r in conn.execute("SELECT * FROM hosts ORDER BY rowid")
     )
     datastores = tuple(

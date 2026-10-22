@@ -5,18 +5,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from vmdash.config import https_url
 from vmdash.models import Datastore, Host, Inventory, Vm, datastore_name
 from vmdash.web.queries import SyncStatus
 
 GROUPS: dict[str, str] = {
-    "host": "Host", "folder": "Folder", "cluster": "Cluster", "datastore": "Datastore",
+    "host": "Host", "folder": "Folder", "datastore": "Datastore",
     "power": "Power state", "uptime": "Uptime", "os": "Guest OS",
 }
 POWER_ORDER = ["Running", "Suspended", "Shut down", "Unknown", "Orphaned", "Template"]
 UPTIME_BUCKETS = ["Under 1 day", "1–7 days", "7–30 days", "30–90 days", "Over 90 days", "Not running"]
 STATUS_CLASS = {"Running": "ok", "Suspended": "warn", "Shut down": "off", "Unknown": "bad", "Orphaned": "bad",
                 "Template": "tpl"}
-NO_HOST, NO_CLUSTER, NO_FOLDER, UNKNOWN_OS, UNKNOWN_DS = "No host", "No cluster", "No folder", "Unknown OS", \
+NO_HOST, NO_FOLDER, UNKNOWN_OS, UNKNOWN_DS = "No host", "No folder", "Unknown OS", \
     "Unknown datastore"
 GB = 2**30
 
@@ -46,6 +47,15 @@ def fmt_when(dt: datetime, now: datetime) -> str:
     """HH:MM for today, full date otherwise."""
     local = dt.astimezone()
     return fmt_time(dt) if local.date() == now.astimezone().date() else fmt_datetime(dt)
+
+
+def vcenter_url(host: str) -> str:
+    """vSphere Client URL for VCENTER_HOST ("vc", "vc:8443", "[2001:db8::5]:443"); "" before the first sync."""
+    return https_url(host).removesuffix(":443") + "/ui/" if host else ""
+
+
+def ghz(mhz: int) -> str:
+    return f"{mhz / 1000:.1f}".removesuffix(".0") + " GHz"
 
 
 def pct(part: int, whole: int) -> int:
@@ -117,12 +127,10 @@ def host_state(host: Host) -> tuple[str, str]:
 class VmRow:
     vm: Vm
     host_name: str
-    cluster: str
     status: str
     status_class: str
     uptime: str
     total_cap: int
-    total_used: int
     search: str
     ip_conflicts: dict[str, list[str]]  # IP -> names of the other VMs that have it
 
@@ -143,7 +151,6 @@ class Totals:
     vcpu: int
     ram_gb: int
     cap: int
-    used: int
     hosts: int
 
 
@@ -164,18 +171,17 @@ def _row(vm: Vm, hosts: dict[str, Host], owners: dict[str, list[str]], now: date
     status = display_status(vm)
     uptime = uptime_text(vm, now)
     cap = sum(d.capacity_bytes for d in vm.disks)
-    used = sum(d.used_bytes for d in vm.disks)
     parts = [
         vm.name, vm.description, vm.folder_path, vm.guest_os, status, uptime,
-        host.name if host else NO_HOST, host.cluster or "" if host else "", host_state(host)[0] if host else "",
+        host.name if host else NO_HOST, host_state(host)[0] if host else "",
         vm.datastore_path, f"{vm.vcpu} vcpu", f"{fmt_ram(vm.memory_mb)} gb", vm.dns_name,
         *(f"{n.network} {n.mac} {' '.join(n.ips)}" for n in vm.nics),
         "last seen" if vm.net_seen_at else "", "ip conflict" if conflicts else "",
         *(f"{t.category}:{t.name} {t.category} {t.name}" for t in vm.tags),
-        *(f"{fmt_size(d.capacity_bytes)} {fmt_size(d.used_bytes)}" for d in vm.disks),
+        *(fmt_size(d.capacity_bytes) for d in vm.disks),
     ]
-    return VmRow(vm, host.name if host else NO_HOST, (host.cluster or "") if host else "", status,
-                 status_class(status), uptime, cap, used, " ".join(p for p in parts if p).lower(), conflicts)
+    return VmRow(vm, host.name if host else NO_HOST, status,
+                 status_class(status), uptime, cap, " ".join(p for p in parts if p).lower(), conflicts)
 
 
 def _totals(rows: list[VmRow]) -> Totals:
@@ -186,13 +192,20 @@ def _totals(rows: list[VmRow]) -> Totals:
         vcpu=sum(r.vm.vcpu for r in live),
         ram_gb=round(sum(r.vm.memory_mb for r in live) / 1024),
         cap=sum(r.total_cap for r in live),
-        used=sum(r.total_used for r in live),
         hosts=len({r.vm.host_moref for r in live if r.vm.host_moref}),
     )
 
 
 def _last(name: str) -> Callable[[str], tuple]:
     return lambda k: (k == name, natural_key(k))
+
+
+FOLDERS_FIRST = ["production", "test"]  # top-level folders shown first, in this order (any letter case)
+
+
+def _folder_order(k: str) -> tuple:
+    f = k.casefold()
+    return (k == NO_FOLDER, FOLDERS_FIRST.index(f) if f in FOLDERS_FIRST else len(FOLDERS_FIRST), natural_key(k))
 
 
 def build_groups(inv: Inventory, group: str, now: datetime) -> list[Group]:
@@ -205,7 +218,6 @@ def build_groups(inv: Inventory, group: str, now: datetime) -> list[Group]:
     key_fn: Callable[[VmRow], str] = {
         "host": lambda r: r.host_name,
         "folder": lambda r: r.vm.folder_path.split("/")[0] or NO_FOLDER,
-        "cluster": lambda r: r.cluster or NO_CLUSTER,
         "datastore": lambda r: datastore_name(r.vm.datastore_path) or UNKNOWN_DS,
         "power": lambda r: r.status,
         "uptime": lambda r: uptime_bucket(r.vm, now),
@@ -213,8 +225,7 @@ def build_groups(inv: Inventory, group: str, now: datetime) -> list[Group]:
     }[group]
     order: Callable[[str], tuple] = {
         "host": _last(NO_HOST),
-        "folder": _last(NO_FOLDER),
-        "cluster": _last(NO_CLUSTER),
+        "folder": _folder_order,
         "datastore": _last(UNKNOWN_DS),
         "os": _last(UNKNOWN_OS),
         "power": lambda k: (POWER_ORDER.index(k),),
@@ -282,4 +293,4 @@ def badge(st: SyncStatus, now: datetime) -> Badge:
             "Check the collector: systemctl status vmdash-collector",
         )
     nxt = ok_at + timedelta(minutes=st.interval_minutes)
-    return Badge("ok", f"Synced {fmt_datetime(ok_at)}", f"Next sync about {fmt_time(nxt)} · page updates itself", None)
+    return Badge("ok", f"Synced {fmt_datetime(ok_at)}", f"Next sync {fmt_time(nxt)}", None)

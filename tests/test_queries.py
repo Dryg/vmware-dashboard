@@ -10,7 +10,7 @@ from vmdash.web.queries import read_status
 
 def test_read_inventory_round_trip(tmp_path):
     inv = make_inventory(
-        hosts=[make_host("a"), make_host("b", cluster=None, in_maintenance=True)],
+        hosts=[make_host("a"), make_host("b", in_maintenance=True)],
         vms=[make_vm("x", tags=(Tag("env", "prod"), Tag("team", "web")), dns_name="x.lab.local",
                      nics=(Nic(4000, "Network adapter 1", "VLAN10", "00:50:56:00:00:01", True, ("10.0.0.1", "fd00::1")),
                            Nic(4001, "Network adapter 2", "", "", False))),

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect x=%222%22 y=%222%22 width=%2212%22 height=%225%22 rx=%221%22 fill=%22%232b6896%22/%3E%3Crect x=%222%22 y=%229%22 width=%2212%22 height=%225%22 rx=%221%22 fill=%22%232b6896%22/%3E%3C/svg%3E">
-<title>vmdash{{ ' · ' ~ status.datacenter if status.datacenter }}</title>
+<title>vmware{{ ' - ' ~ status.vcenter_host if status.vcenter_host }}</title>
 <script>{{ boot_js }}</script>
 <link rel="stylesheet" href="{{ static_url('style.css') }}">
 <script src="{{ static_url('app.js') }}" defer></script>
@@ -12,7 +12,9 @@
 <body data-snapshot="{{ status.snapshot_uid or '' }}" data-group="{{ group }}">
 <header class="top">
  <div class="r1 gut">
-  <div class="brand"><strong>vmdash</strong><span>{{ status.vcenter_host }}{{ ' · ' ~ status.datacenter if status.datacenter }}</span></div>
+  {%- set vc_url = vcenter_url(status.vcenter_host) %}
+  {%- set vc_name = status.vcenter_host ~ (' · ' ~ status.datacenter if status.datacenter else '') %}
+  {% if vc_url %}<a class="brand" href="{{ vc_url }}" target="_blank" rel="noopener noreferrer" title="Open vSphere Client">{{ vc_name }}</a>{% else %}<div class="brand"></div>{% endif %}
   <div class="search">
    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="m11 11 3.5 3.5"/></svg>
    <input id="q" type="search" placeholder="Search everything: name, tag, folder, OS, host, datastore, status…" aria-label="Search VMs" autocomplete="off" spellcheck="false">
@@ -42,17 +44,24 @@
  <span><b data-sum="vms">{{ totals.vms }}</b> VMs (<span data-sum="running">{{ totals.running }}</span> running)</span>
  <span><b data-sum="vcpu">{{ totals.vcpu }}</b> vCPU</span>
  <span><b data-sum="ram">{{ totals.ram_gb }}</b> GB RAM</span>
- <span><b data-sum="cap">{{ fmt_size(totals.cap) }}</b> provisioned, <span data-sum="used">{{ fmt_size(totals.used) }}</span> used</span>
+ <span><b data-sum="cap">{{ fmt_size(totals.cap) }}</b> provisioned</span>
 </div>
 <main class="gut">
 <div class="tw">
-<table id="t">
+<table id="t"{{ ' class="wh"'|safe if show_host }}>
+<colgroup><col>{% if show_host %}<col class="w-host">{% endif %}<col class="w-st"><col class="w-net"><col class="w-cpu"><col class="w-ram"><col class="w-loc"><col class="w-dk"><col class="w-tot"></colgroup>
 <thead><tr><th>VM</th>{% if show_host %}<th>Host</th>{% endif %}<th>Status</th><th>Network</th><th class="num">vCPU</th><th class="num">RAM GB</th><th>Location</th><th>Disks</th><th class="num">Total</th></tr></thead>
 {%- set cols = 9 if show_host else 8 %}
 {%- for g in groups %}
 <tbody class="grp" data-key="{{ g.key }}">
-<tr class="grow"><th colspan="{{ cols }}" scope="rowgroup"><button type="button" class="gbtn" aria-expanded="true"><span class="caret">▾</span><span class="gname">{{ g.label }}</span>
-{%- if g.host %}{% set hs = host_state(g.host) %}{% if g.host.cluster %}<span class="chip">{{ g.host.cluster }}</span>{% endif %}<span class="hs"><span class="dot {{ hs[1] }}"></span>{{ hs[0] }}</span>{% endif %}
+<tr class="grow"><th colspan="{{ cols }}" scope="rowgroup"><button type="button" class="gbtn{{ ' hh' if g.host }}" aria-expanded="true"><span class="caret">▾</span>
+{%- if g.host %}{% set h, hs = g.host, host_state(g.host) %}{% set usage = h.connection_state == "connected" and h.cpu_total_mhz and h.mem_total_bytes %}
+{#- host usage popup: shown on hover of the host name or when the header has keyboard focus #}
+<span class="hn{{ ' pu' if usage }}"><span class="gname">{{ g.label }}</span>
+{%- if usage %}<span class="pop" role="tooltip"><span>CPU</span>{{ bar(h.cpu_used_mhz, h.cpu_total_mhz) }}<span>{{ pct(h.cpu_used_mhz, h.cpu_total_mhz) }}% of {{ ghz(h.cpu_total_mhz) }}</span>
+<span>Memory</span>{{ bar(h.mem_used_bytes, h.mem_total_bytes) }}<span>{{ fmt_size(h.mem_used_bytes) }} of {{ fmt_size(h.mem_total_bytes) }} ({{ pct(h.mem_used_bytes, h.mem_total_bytes) }}%)</span></span>{% endif %}</span>
+<span class="hs"><span class="dot {{ hs[1] }}"></span>{{ hs[0] }}</span>
+{%- else %}<span class="gname">{{ g.label }}</span>{% endif %}
 {%- if g.datastore %}{% set d = g.datastore %}{% set u = d.capacity_bytes - d.free_bytes %}<span class="dsu">{{ bar(u, d.capacity_bytes) }}{{ fmt_size(u) }} of {{ fmt_size(d.capacity_bytes) }} used ({{ pct(u, d.capacity_bytes) }}%)</span>{% endif -%}
 <span class="htot">{{ g.totals.vms }} VM{{ 's' if g.totals.vms != 1 }} · {{ g.totals.vcpu }} vCPU · {{ g.totals.ram_gb }} GB RAM · {{ fmt_size(g.totals.cap) }}</span></button></th></tr>
 
@@ -65,6 +74,7 @@
 </table>
 </div>
 </main>
-<footer class="gut">vmdash · {% if status.snapshot_id %}snapshot #{{ status.snapshot_id }} · {% endif %}{{ inv.vms|length }} VMs · grouped by {{ GROUPS[group]|lower }}</footer>
+{%- set tpl_count = inv.vms|selectattr("is_template")|list|length %}
+<footer class="gut">vmdash · {{ inv.vms|length - tpl_count }} VMs · {{ tpl_count }} template{{ 's' if tpl_count != 1 }} · grouped by {{ GROUPS[group]|lower }}</footer>
 </body>
 </html>

@@ -11,12 +11,16 @@ from vmdash.config import CollectorSettings, host_port, vcenter_tls
 
 log = logging.getLogger(__name__)
 
-HOST_PROPS = ["name", "parent", "runtime.connectionState", "runtime.inMaintenanceMode"]
+HOST_PROPS = [
+    "name", "runtime.connectionState", "runtime.inMaintenanceMode",
+    "summary.quickStats.overallCpuUsage", "summary.quickStats.overallMemoryUsage",
+    "summary.hardware.cpuMhz", "summary.hardware.numCpuCores", "summary.hardware.memorySize",
+]
 DATASTORE_PROPS = ["name", "summary.capacity", "summary.freeSpace"]
 VM_PROPS = [
     "name", "parent", "config.annotation", "config.template", "config.hardware.numCPU", "config.hardware.memoryMB",
     "config.hardware.device", "config.files.vmPathName", "config.guestFullName", "guest.guestFullName",
-    "runtime.powerState", "runtime.connectionState", "runtime.host", "runtime.bootTime", "layoutEx",
+    "runtime.powerState", "runtime.connectionState", "runtime.host", "runtime.bootTime",
     "guest.hostName", "guest.net",
 ]
 
@@ -83,16 +87,7 @@ def to_guest_nics(guest_nics) -> list[dict]:
     } for n in guest_nics or []]
 
 
-def to_layout(layout) -> dict | None:
-    if layout is None:
-        return None
-    return {
-        "files": {f.key: int(f.size or 0) for f in layout.file or []},
-        "disks": {d.key: [k for unit in d.chain or [] for k in unit.fileKey or []] for d in layout.disk or []},
-    }
-
-
-CONVERT = {"config.hardware.device": to_devices, "guest.net": to_guest_nics, "layoutEx": to_layout}
+CONVERT = {"config.hardware.device": to_devices, "guest.net": to_guest_nics}
 
 
 def connect(settings: CollectorSettings):
@@ -111,7 +106,7 @@ def disconnect(si) -> None:
         log.debug("disconnect failed", exc_info=True)
 
 
-def _collect(si, root, obj_type, paths: list[str], extra=None) -> dict[str, dict]:
+def _collect(si, root, obj_type, paths: list[str]) -> dict[str, dict]:
     content = si.RetrieveContent()
     view = content.viewManager.CreateContainerView(root, [obj_type], True)
     try:
@@ -125,10 +120,7 @@ def _collect(si, root, obj_type, paths: list[str], extra=None) -> dict[str, dict
         result = pc.RetrievePropertiesEx([spec], PC.RetrieveOptions(maxObjects=1000))
         while result:
             for oc in result.objects:
-                props = {p.name: CONVERT.get(p.name, plain)(p.val) for p in oc.propSet or []}
-                if extra:
-                    props.update(extra(oc.obj))
-                out[oc.obj._moId] = props
+                out[oc.obj._moId] = {p.name: CONVERT.get(p.name, plain)(p.val) for p in oc.propSet or []}
             result = pc.ContinueRetrievePropertiesEx(result.token) if result.token else None
         return out
     finally:
@@ -157,8 +149,6 @@ def fetch_raw(si, settings: CollectorSettings) -> RawInventory:
         vcenter_host=settings.vcenter_host,
         datacenters=datacenters,
         folders=_collect(si, root, vim.Folder, ["name", "parent"]),
-        compute=_collect(si, root, vim.ComputeResource, ["name"],
-                         extra=lambda o: {"is_cluster": isinstance(o, vim.ClusterComputeResource)}),
         hosts=_collect(si, root, vim.HostSystem, HOST_PROPS),
         datastores=_collect(si, root, vim.Datastore, DATASTORE_PROPS),
         networks=_collect(si, root, vim.Network, ["name"]),

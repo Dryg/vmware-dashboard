@@ -147,3 +147,32 @@ def test_fail_stale_runs_sets_finished_at(conn):
     fail_stale_runs(conn, now=datetime(2026, 10, 22, 12, 0, tzinfo=UTC))
     assert conn.execute("select finished_at from sync_runs where id=?", (rid,)).fetchone()[0] == \
         "2026-10-22T12:00:00+00:00"
+
+
+def test_upgrade_from_v3_keeps_last_known_network_tags_and_runs(tmp_path):
+    from vmdash.db import read_inventory
+    from vmdash.models import Nic, Tag
+    path = tmp_path / "old.db"
+    seen = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
+    conn = connect_rw(path)
+    rid = start_run(conn)
+    finish_run(conn, rid, "success")
+    vm = make_vm("web01", dns_name="web01.lab", net_seen_at=seen, tags=(Tag("env", "prod"),),
+                 nics=(Nic(4000, "Network adapter 1", "VLAN10", "00:50:56:00:00:01", True, ("10.0.0.5",)),))
+    write_snapshot(conn, make_inventory(vms=[vm]), rid, 15)
+    # turn hosts and disks back into their v3 shape, as an install from before this version has them
+    conn.executescript("""
+        DROP TABLE hosts; CREATE TABLE hosts (moref TEXT PRIMARY KEY, name TEXT NOT NULL, cluster TEXT,
+            connection_state TEXT NOT NULL, in_maintenance INTEGER NOT NULL);
+        DROP TABLE disks; CREATE TABLE disks (vm_moref TEXT NOT NULL, key INTEGER NOT NULL, label TEXT NOT NULL,
+            capacity_bytes INTEGER NOT NULL, used_bytes INTEGER NOT NULL, datastore TEXT NOT NULL);
+        PRAGMA user_version = 3;""")
+    conn.close()
+
+    conn = connect_rw(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    (kept,) = read_inventory(conn).vms
+    assert (kept.dns_name, kept.net_seen_at, kept.nics[0].ips, kept.tags) == (
+        "web01.lab", seen, ("10.0.0.5",), (Tag("env", "prod"),))
+    assert conn.execute("select count(*) from sync_runs").fetchone()[0] == 1
+    assert "cpu_used_mhz" in [r[1] for r in conn.execute("PRAGMA table_info(hosts)")]

@@ -1,7 +1,7 @@
 # vmdash
 
 A fast, read-only dashboard for a vSphere datacenter. Every VM on one page, grouped by ESXi host
-(or folder, cluster, datastore, power state, uptime, guest OS), with instant search across all fields.
+(or folder, datastore, power state, uptime, guest OS), with instant search across all fields.
 
 - **vmdash-collector** reads vCenter (pyVmomi + REST tagging API) every few minutes and writes a snapshot to SQLite.
 - **vmdash-web** renders the page from SQLite only (FastAPI + Jinja2, ~8 KB of CSS, ~8 KB of plain JS).
@@ -38,7 +38,7 @@ object gives the collector all VM data but no tags, and the page then shows "tag
 
 **Privileges:** the Read-only role contains exactly `System.Anonymous`, `System.View` and `System.Read`.
 That covers everything vmdash reads: inventory, hardware, disks and file sizes, guest info from VMware Tools
-(IPs, DNS name), hosts, clusters, datastores and tags. To limit vmdash to one datacenter, set
+(IPs, DNS name), hosts and their CPU/memory usage, datastores and tags. To limit vmdash to one datacenter, set
 `VCENTER_DATACENTER`; the permission can stay global.
 
 **Avoid two outages:**
@@ -67,17 +67,105 @@ the config files it uses are in [examples/](examples/).
 ## Page features
 
 - Search box (`/` or `Ctrl+K`): every word must match; searches name, description, folder, tags, OS,
-  status, uptime, host, cluster, datastore, sizes, DNS name, network, MAC and IP addresses.
+  status, uptime, host, datastore, disk sizes, DNS name, network, MAC and IP addresses.
 - Network column: the guest's DNS name and every network adapter with its port group and IPs.
   IPs and DNS name come from VMware Tools; when a VM is off (or Tools stops reporting) the last known
   values stay, greyed out with "last seen <date>". An IP found on more than one VM is shown in red with
   the other VM's name (search `ip conflict` to list them all).
-- Group by host (default), folder, cluster, datastore, power state, uptime or guest OS (`?group=` in the URL).
+- Group by host (default), folder, datastore, power state, uptime or guest OS (`?group=` in the URL).
 - Show templates toggle, collapsible groups, light/dark theme (remembered per browser).
 - The header shows sync status; the page reloads itself when a new snapshot arrives. A failed sync turns it
   red with the error in a banner; a sync where only tags failed turns it orange (tags from the previous sync stay).
 - `GET /healthz` (no auth) for monitoring: HTTP 503 when the data is older than 3 sync intervals, and
   `"last_run": "success" | "partial" | "failed"` to alert on the first failure. `GET /status.json` for the sync state.
+
+## Updating a server
+
+For an install made with [deploy/INSTALL.md](deploy/INSTALL.md) (code in `/opt/vmdash`). Steps 1, 2, 4, 5 and 6
+are the same either way; step 3 brings in the new code, with git or without it. About 5 minutes, and the
+dashboard is down only between steps 1 and 6.
+
+**1. Stop and back up** the database and the current code, so you can roll back:
+
+```bash
+sudo systemctl stop vmdash-web vmdash-collector
+B=/var/backups/vmdash/$(date +%F-%H%M)
+sudo install -d -m 700 "$B"
+sudo cp -a /var/lib/vmdash/. "$B"/
+sudo tar -C /opt/vmdash --exclude=./.venv --exclude=./.python --exclude=./.uv-cache -czf "$B/code.tar.gz" .
+```
+
+**2. Remove the old code**, keeping the virtualenv, Python and the uv cache. Unpacking into an emptied folder
+also removes files the new version no longer has:
+
+```bash
+sudo find /opt/vmdash -mindepth 1 -maxdepth 1 ! -name .venv ! -name .python ! -name .uv-cache -exec rm -rf {} +
+```
+
+**3a. New code with git**, from a checkout on the server (only committed changes are copied):
+
+```bash
+git -C ~/vmware-dashboard pull
+git -C ~/vmware-dashboard archive HEAD | sudo tar -x -C /opt/vmdash
+```
+
+**3b. New code without git**, from a `.tar.gz` of the repository. Get it one of these ways:
+
+- On the server, if it can reach GitHub (public repository):
+  `curl -fL -o /tmp/vmdash.tar.gz https://github.com/Dryg/vmware-dashboard/archive/refs/heads/main.tar.gz`
+- On any computer, open that same link in a browser (it works for a private repository while you are logged in
+  to GitHub), then copy the file over: `scp main.tar.gz server:/tmp/vmdash.tar.gz`
+- From a checkout on your computer: `git archive -o vmdash.tar.gz HEAD`, then `scp` it the same way.
+
+```bash
+sudo tar -xzf /tmp/vmdash.tar.gz -C /opt/vmdash --strip-components=1   # GitHub's archive has one top folder
+```
+
+For an archive made with `git archive` (no top folder), leave out `--strip-components=1`.
+
+**4. Install the dependencies** (needs access to PyPI only when they changed):
+
+```bash
+sudo chown -R vmdash:vmdash /opt/vmdash
+sudo -u vmdash env UV_CACHE_DIR=/opt/vmdash/.uv-cache UV_PYTHON_INSTALL_DIR=/opt/vmdash/.python \
+    "$(command -v uv)" sync --frozen --no-dev --directory /opt/vmdash
+```
+
+**5. Take over changed config files.** The services read the copies in `/etc`, so compare them with the new
+examples; no output means nothing changed:
+
+```bash
+for u in collector web; do diff /etc/systemd/system/vmdash-$u.service /opt/vmdash/examples/systemd/vmdash-$u.service; done
+sudo diff /etc/vmdash/vmdash.env /opt/vmdash/examples/vmdash.env   # new settings; keep your own values
+```
+
+If a unit differs: `sudo cp /opt/vmdash/examples/systemd/vmdash-*.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
+The nginx examples in `examples/nginx/` are compared the same way with your file in `/etc/nginx/conf.d/`.
+
+**6. Start and check:**
+
+```bash
+sudo systemctl start vmdash-collector vmdash-web
+journalctl -u vmdash-collector -n 20 --no-pager   # "sync success in ...s"
+curl -s http://localhost:8080/healthz             # "ok":true, "last_run":"success"
+```
+
+The collector syncs right after it starts. When a new version changes the database format it upgrades it on that
+first sync (last-seen IPs and tags are kept) and the page shows "No sync yet" for those few seconds.
+
+**Rollback** to the backup from step 1 (`ls /var/backups/vmdash` lists them):
+
+```bash
+B=/var/backups/vmdash/2026-10-22-1930   # the one to go back to
+sudo systemctl stop vmdash-web vmdash-collector
+sudo find /opt/vmdash -mindepth 1 -maxdepth 1 ! -name .venv ! -name .python ! -name .uv-cache -exec rm -rf {} +
+sudo tar -xzf "$B/code.tar.gz" -C /opt/vmdash
+# the shell inside sudo expands vmdash.db*: these folders are not readable for your own user
+sudo sh -c 'rm -f /var/lib/vmdash/vmdash.db* && cp -a "$1"/vmdash.db* /var/lib/vmdash/' - "$B"
+```
+
+Then run steps 4 and 6. The database must go back too: an older version does not read a database that a newer
+one has upgraded.
 
 ## Development
 

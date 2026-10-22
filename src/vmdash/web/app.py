@@ -107,7 +107,8 @@ def create_app(settings: WebSettings, now: Callable[[], datetime] = lambda: date
         static_url=lambda name: f"static/{name}?v={versions.get(name, '0')}",
         fmt_size=views.fmt_size, fmt_ram=views.fmt_ram, pct=views.pct, host_state=views.host_state, bar=fragments.bar,
         row_html=fragments.row_html,
-        GROUPS=views.GROUPS, boot_js=Markup(BOOT_JS),
+        GROUPS=views.GROUPS, boot_js=Markup(BOOT_JS), ghz=views.ghz,
+        vcenter_url=lambda host: settings.vcenter_ui_url or views.vcenter_url(host),
     )
 
     security = HTTPBasic(realm="vmdash")

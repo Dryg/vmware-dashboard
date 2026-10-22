@@ -13,9 +13,11 @@ from vmdash.web.views import (
     fmt_datetime,
     fmt_ram,
     fmt_size,
+    ghz,
     natural_key,
     uptime_bucket,
     uptime_text,
+    vcenter_url,
 )
 
 
@@ -34,7 +36,7 @@ def keys(groups):
 
 
 def test_groups_constant():
-    assert list(GROUPS) == ["host", "folder", "cluster", "datastore", "power", "uptime", "os"]
+    assert list(GROUPS) == ["host", "folder", "datastore", "power", "uptime", "os"]
     assert GROUPS["power"] == "Power state" and GROUPS["os"] == "Guest OS"
 
 
@@ -56,7 +58,13 @@ def test_vms_sorted_inside_group():
 def test_folder_group_uses_first_segment():
     inv = make_inventory(vms=[make_vm("a", folder_path="Production/Web"), make_vm("b", folder_path="Production/DB"),
                               make_vm("c", folder_path="Dev"), make_vm("d", folder_path="")])
-    assert keys(build_groups(inv, "folder", NOW)) == ["Dev", "Production", "No folder"]
+    assert keys(build_groups(inv, "folder", NOW)) == ["Production", "Dev", "No folder"]
+
+
+def test_folder_group_production_and_test_first():
+    names = ["Archive", "test", "Dev", "", "PRODUCTION", "Infra"]
+    inv = make_inventory(vms=[make_vm(f"v{i}", folder_path=f) for i, f in enumerate(names)])
+    assert keys(build_groups(inv, "folder", NOW)) == ["PRODUCTION", "test", "Archive", "Dev", "Infra", "No folder"]
 
 
 def test_power_group_order():
@@ -114,13 +122,6 @@ def test_datastore_group_has_datastore_and_order():
     assert groups[1].datastore.free_bytes == 10 * GB
 
 
-def test_cluster_group_no_cluster_last():
-    hosts = [make_host("h1", cluster="Cluster-B"), make_host("h2", cluster=None), make_host("h3", cluster="Cluster-A")]
-    inv = make_inventory(hosts=hosts, vms=[make_vm(f"v{i}", host_moref=f"host-h{i}") for i in (1, 2, 3)]
-                         + [make_vm("orphan", host_moref=None)])
-    assert keys(build_groups(inv, "cluster", NOW)) == ["Cluster-A", "Cluster-B", "No cluster"]
-
-
 def test_os_group():
     inv = make_inventory(vms=[make_vm("a", guest_os="Rocky Linux 9"), make_vm("b", guest_os="")])
     assert keys(build_groups(inv, "os", NOW)) == ["Rocky Linux 9", "Unknown OS"]
@@ -134,15 +135,15 @@ def test_unknown_group_falls_back():
 def test_group_totals_exclude_templates():
     inv = make_inventory(vms=[make_vm("a", vcpu=4, memory_mb=8192), make_vm("t", is_template=True, vcpu=2)])
     t = build_groups(inv, "host", NOW)[0].totals
-    assert (t.vms, t.running, t.vcpu, t.ram_gb, t.cap, t.used) == (1, 1, 4, 8, 60 * GB, 31 * GB)
+    assert (t.vms, t.running, t.vcpu, t.ram_gb, t.cap) == (1, 1, 4, 8, 60 * GB)
     assert len(build_groups(inv, "host", NOW)[0].rows) == 2
 
 
 def test_row_fields():
-    vm = make_vm("a", disks=(Disk(1, "Hard disk 1", 60 * GB, 30 * GB, "ds"), Disk(2, "Hard disk 2", 40 * GB, 10 * GB, "ds")))
+    vm = make_vm("a", disks=(Disk(1, "Hard disk 1", 60 * GB, "ds"), Disk(2, "Hard disk 2", 40 * GB, "ds")))
     row = build_groups(make_inventory(vms=[vm]), "folder", NOW)[0].rows[0]
-    assert (row.host_name, row.cluster, row.status, row.status_class) == ("esx01.lab.local", "Cluster-A", "Running", "ok")
-    assert (row.total_cap, row.total_used) == (100 * GB, 40 * GB)
+    assert (row.host_name, row.status, row.status_class) == ("esx01.lab.local", "Running", "ok")
+    assert row.total_cap == 100 * GB
     assert row.uptime == "up 21 d"
 
 
@@ -152,9 +153,10 @@ def test_search_text_contains_everything():
                  nics=(Nic(4000, "Network adapter 1", "VLAN10-Prod", "00:50:56:AA:00:01", True, ("10.10.0.5",)),))
     s = build_groups(make_inventory(vms=[vm]), "host", NOW)[0].rows[0].search
     for needle in ("web01", "web server", "production/web", "env:prod", "env prod", "ubuntu 24.04", "running",
-                   "up 21 d", "esx01.lab.local", "cluster-a", "connected", "[ds-ssd01] web01/", "4 vcpu", "16 gb",
-                   "60 gb", "31 gb", "web01.lab.local", "vlan10-prod", "00:50:56:aa:00:01", "10.10.0.5"):
+                   "up 21 d", "esx01.lab.local", "connected", "[ds-ssd01] web01/", "4 vcpu", "16 gb",
+                   "60 gb", "web01.lab.local", "vlan10-prod", "00:50:56:aa:00:01", "10.10.0.5"):
         assert needle in s, needle
+    assert "cluster" not in s  # the cluster is not shown anywhere, so it is not searchable either
     assert s == s.lower()
 
 
@@ -185,7 +187,7 @@ def run(st, start, end=None, error=None):
 def test_badge_ok():
     b = badge(status(run("success", NOW - timedelta(minutes=1), NOW), NOW), NOW + timedelta(minutes=5))
     assert (b.state, b.line1, b.line2, b.banner) == (
-        "ok", "Synced 22.10.2026 12:00", "Next sync about 12:15 · page updates itself", None)
+        "ok", "Synced 22.10.2026 12:00", "Next sync 12:15", None)
 
 
 def test_badge_running():
@@ -267,3 +269,15 @@ def test_badge_partial_tags_failed():
 
 def test_badge_partial_too_old_is_stale():
     assert badge(status(run("partial", NOW, NOW, "tags: x"), NOW), NOW + timedelta(hours=2)).state == "stale"
+
+
+def test_vcenter_url():
+    assert vcenter_url("vcsa01.lab.local") == "https://vcsa01.lab.local/ui/"
+    assert vcenter_url("vc:8443") == "https://vc:8443/ui/"
+    assert vcenter_url("2001:db8::5") == "https://[2001:db8::5]/ui/"
+    assert vcenter_url("") == ""
+
+
+def test_ghz():
+    assert ghz(83200) == "83.2 GHz"
+    assert ghz(2000) == "2 GHz"

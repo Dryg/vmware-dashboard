@@ -11,13 +11,13 @@
   const put = (s, k, v) => { try { v == null ? s.removeItem(k) : s.setItem(k, v); } catch (e) { /* storage blocked */ } };
   const size = (b) => { const g = b / GB; return g >= 1024 ? (g / 1024).toFixed(1).replace(/\.0$/, "") + " TB" : Math.round(g) + " GB"; };
 
-  // Parse every row once: data-n = "vcpu memMB capBytes usedBytes running hostMoref"
+  // Parse every row once: data-n = "vcpu memMB capBytes running hostMoref"
   const groups = [...doc.querySelectorAll("tbody.grp")].map((tb) => ({
     tb, key: tb.dataset.key, btn: tb.querySelector(".gbtn"), tot: tb.querySelector(".htot"),
     rows: [...tb.querySelectorAll("tr.vm")].map((tr) => {
       const n = tr.dataset.n.split(" ");
       return { tr, q: tr.dataset.q, tpl: tr.classList.contains("tpl"),
-        cpu: +n[0], ram: +n[1], cap: +n[2], used: +n[3], run: n[4] === "1", host: n[5] || "" };
+        cpu: +n[0], ram: +n[1], cap: +n[2], run: n[3] === "1", host: n[4] || "" };
     }),
   }));
 
@@ -50,7 +50,7 @@
   function apply() {
     const terms = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const searching = terms.length > 0, showT = root.classList.contains("show-tpl");
-    const sum = { vms: 0, running: 0, vcpu: 0, ram: 0, cap: 0, used: 0 }, hosts = new Set(), shown = [];
+    const sum = { vms: 0, running: 0, vcpu: 0, ram: 0, cap: 0 }, hosts = new Set(), shown = [];
     let pool = 0, tplHits = 0;
     for (const g of groups) {
       let n = 0, cpu = 0, ram = 0, cap = 0;
@@ -61,7 +61,7 @@
         pool++;
         if (!match) continue;
         n++; cpu += r.cpu; ram += r.ram; cap += r.cap;
-        sum.vms++; sum.running += r.run; sum.vcpu += r.cpu; sum.ram += r.ram; sum.cap += r.cap; sum.used += r.used;
+        sum.vms++; sum.running += r.run; sum.vcpu += r.cpu; sum.ram += r.ram; sum.cap += r.cap;
         if (r.host) hosts.add(r.host);
         shown.push(r.tr);
       }
@@ -72,7 +72,7 @@
       g.tot.textContent = `${n} VM${n === 1 ? "" : "s"} · ${cpu} vCPU · ${Math.round(ram / 1024)} GB RAM · ${size(cap)}`;
     }
     const vals = { hosts: hosts.size, vms: sum.vms, running: sum.running, vcpu: sum.vcpu,
-      ram: Math.round(sum.ram / 1024), cap: size(sum.cap), used: size(sum.used) };
+      ram: Math.round(sum.ram / 1024), cap: size(sum.cap) };
     for (const el of doc.querySelectorAll("[data-sum]")) el.textContent = vals[el.dataset.sum];
     count.innerHTML = (searching ? `<b>${sum.vms}</b> of ${pool} VMs` : `<b>${pool}</b> VMs`) +
       (tplHits ? ` · <button type="button" class="lnk" id="showtpl">${tplHits} more in templates</button>` : "");
@@ -107,6 +107,44 @@
     saveCollapsed(); apply();
   });
 
+  // Click an IP or DNS name to copy it. The Clipboard API needs HTTPS; plain HTTP falls back to execCommand.
+  // "Copied!" is a fixed bubble on <body>: table cells clip anything that sticks out of them.
+  const tip = doc.createElement("div");
+  tip.className = "tip"; tip.hidden = true; tip.setAttribute("role", "status");
+  body.append(tip);
+  let tipTimer = 0;
+  $("t").addEventListener("click", (e) => {
+    const el = e.target.closest(".ip,.dns"), sel = getSelection();
+    if (!el || String(sel)) return; // leave a manual text selection alone
+    const show = (ok) => {
+      const r = el.getBoundingClientRect();
+      tip.textContent = ok ? "Copied!" : "Copy failed";
+      tip.style.left = r.left + r.width / 2 + "px"; tip.style.top = r.top + "px"; tip.hidden = false;
+      clearTimeout(tipTimer); tipTimer = setTimeout(() => { tip.hidden = true; }, 1000);
+    };
+    const legacy = () => {
+      const r = doc.createRange(); r.selectNodeContents(el);
+      sel.removeAllRanges(); sel.addRange(r); // the click left a collapsed caret; Chrome ignores a second range
+      let ok = false;
+      try { ok = doc.execCommand("copy"); } catch (err) { /* unsupported */ }
+      sel.removeAllRanges(); show(ok);
+    };
+    if (navigator.clipboard && isSecureContext) navigator.clipboard.writeText(el.textContent).then(() => show(true), legacy);
+    else legacy();
+  });
+
+  // Host usage popups are position:fixed (the table's scroll box would clip them): put each one under its host
+  // name when it is about to show, or above it when there is no room below. CSS shows it after 1 s.
+  const placePop = (hn) => {
+    const p = hn && hn.querySelector(".pop");
+    if (!p) return;
+    const r = hn.getBoundingClientRect(), h = p.offsetHeight;
+    p.style.left = r.left + "px";
+    p.style.top = (r.bottom + 6 + h > innerHeight ? r.top - 6 - h : r.bottom + 6) + "px";
+  };
+  $("t").addEventListener("mouseover", (e) => placePop(e.target.closest(".pu")));
+  $("t").addEventListener("focusin", (e) => placePop(e.target.querySelector && e.target.querySelector(".pu")));
+
   fold.addEventListener("click", () => {
     const keys = groups.filter((g) => !g.tb.classList.contains("hide")).map((g) => g.key);
     const all = keys.every((k) => collapsed.has(k));
@@ -121,6 +159,11 @@
   tpl.checked = root.classList.contains("show-tpl");
   tpl.addEventListener("change", () => setTemplates(tpl.checked));
   count.addEventListener("click", (e) => { if (e.target.id === "showtpl") setTemplates(true); });
+  // Changing the grouping loads a new page: carry the search over (restored at the end of this file).
+  doc.querySelector(".seg").addEventListener("click", (e) => {
+    const newTab = e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0;
+    if (e.target.closest("a") && !newTab) put(sessionStorage, "vmdash.q", q.value);
+  });
 
   const themeBtn = $("theme");
   const showTheme = () => {

@@ -68,6 +68,15 @@ class WebSettings(BaseConfig):
     web_password: SecretStr
     web_ssl_cert: Path | None = None
     web_ssl_key: Path | None = None
+    # vSphere Client link in the header; default: built from VCENTER_HOST, which the browser may not reach
+    vcenter_ui_url: str = ""
+
+    @field_validator("vcenter_ui_url")
+    @classmethod
+    def http_url(cls, v: str) -> str:
+        if v and not v.startswith(("https://", "http://")):
+            raise ValueError("must start with https:// or http://")
+        return v
 
     @field_validator("web_password")
     @classmethod

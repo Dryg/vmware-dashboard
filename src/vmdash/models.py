@@ -15,9 +15,13 @@ def datastore_name(path: str) -> str:
 class Host:
     moref: str
     name: str
-    cluster: str | None
     connection_state: str  # connected | disconnected | notResponding
     in_maintenance: bool
+    # usage at sync time (vCenter quick stats); 0 when the host does not report it (disconnected)
+    cpu_used_mhz: int = 0
+    cpu_total_mhz: int = 0
+    mem_used_bytes: int = 0
+    mem_total_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +37,6 @@ class Disk:
     key: int
     label: str
     capacity_bytes: int
-    used_bytes: int
     datastore: str
 
 

@@ -14,7 +14,6 @@ class RawInventory:
     vcenter_host: str
     datacenters: dict[str, dict] = field(default_factory=dict)
     folders: dict[str, dict] = field(default_factory=dict)
-    compute: dict[str, dict] = field(default_factory=dict)  # {"name", "is_cluster"}
     hosts: dict[str, dict] = field(default_factory=dict)
     datastores: dict[str, dict] = field(default_factory=dict)
     networks: dict[str, dict] = field(default_factory=dict)  # {"name"}
@@ -38,14 +37,6 @@ def folder_path(folder_moref: str | None, folders: dict[str, dict], roots: set[s
         names.append(folders[current].get("name", ""))
         current = folders[current].get("parent")
     return "/".join(reversed(names))
-
-
-def disk_used_bytes(disk_key: int, layout: dict | None) -> int:
-    """Sum of every file in the disk's chain (base disk plus snapshot deltas)."""
-    if not layout:
-        return 0
-    files = layout.get("files", {})
-    return sum(files.get(k, 0) for k in layout.get("disks", {}).get(disk_key, []))
 
 
 def useful_ips(ips: list[str]) -> tuple[str, ...]:
@@ -111,12 +102,14 @@ def build_inventory(raw: RawInventory, tags: dict[str, list[Tag]]) -> Inventory:
 
     hosts = []
     for moref, h in raw.hosts.items():
-        compute = raw.compute.get(h.get("parent") or "", {})
         hosts.append(Host(
             moref=moref, name=h.get("name") or moref,
-            cluster=compute.get("name") if compute.get("is_cluster") else None,
             connection_state=h.get("runtime.connectionState") or "connected",
             in_maintenance=bool(h.get("runtime.inMaintenanceMode")),
+            cpu_used_mhz=int(h.get("summary.quickStats.overallCpuUsage") or 0),
+            cpu_total_mhz=int(h.get("summary.hardware.cpuMhz") or 0) * int(h.get("summary.hardware.numCpuCores") or 0),
+            mem_used_bytes=int(h.get("summary.quickStats.overallMemoryUsage") or 0) * 2**20,  # reported in MB
+            mem_total_bytes=int(h.get("summary.hardware.memorySize") or 0),
         ))
 
     datastores = [
@@ -127,12 +120,10 @@ def build_inventory(raw: RawInventory, tags: dict[str, list[Tag]]) -> Inventory:
 
     vms = []
     for moref, v in raw.vms.items():
-        layout = v.get("layoutEx")
         devices = v.get("config.hardware.device") or {}
         disks = tuple(
             Disk(
                 key=d["key"], label=d.get("label") or f"Disk {i}", capacity_bytes=int(d.get("capacity_bytes") or 0),
-                used_bytes=disk_used_bytes(d["key"], layout),
                 datastore=ds_names.get(d.get("datastore") or "") or datastore_name(d.get("file_name", "")),
             )
             for i, d in enumerate(devices.get("disks") or [], 1)

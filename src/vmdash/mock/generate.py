@@ -29,14 +29,14 @@ ROLES = [
     ("vpn", "WireGuard gateway", "Infra", D12, 1, 2, [], []),
     ("jump", "Admin jump host", "Infra", D12, 2, 4, [], [("owner", "ops")]),
     ("build", "GitLab runner, Docker executor", "Dev/CI", U22, 8, 32, [300], [("team", "platform")]),
-    ("test", "QA sandbox", "Dev/Test", U22, 2, 8, [], []),
+    ("test", "QA sandbox", "Test", U22, 2, 8, [], []),
     ("etl", "Nightly data import jobs", "Production/Data", R9, 4, 16, [250], [("team", "data")]),
 ]
-ENV_BY_FOLDER = {"Production": "prod", "Infra": "prod", "Dev": "dev", "Archive": "legacy"}
+ENV_BY_FOLDER = {"Production": "prod", "Infra": "prod", "Dev": "dev", "Test": "test", "Archive": "legacy"}
 
 # top-level folder -> port group, IPv4 prefix; DB servers also sit on the backup network
 NETWORKS = {"Production": ("VLAN10-Prod", "10.10"), "Infra": ("VLAN20-Infra", "10.20"),
-            "Dev": ("VLAN30-Dev", "10.30")}
+            "Dev": ("VLAN30-Dev", "10.30"), "Test": ("VLAN40-Test", "10.40")}
 OTHER_NETWORK, BACKUP_NETWORK = ("VM Network", "192.168"), ("VLAN90-Backup", "10.90")
 
 DATASTORES = [("ds-ssd01", 2 * TB, 0.45), ("ds-ssd02", 2 * TB, 0.22), ("ds-ssd03", 2 * TB, 0.55),
@@ -49,13 +49,20 @@ def _now(now: datetime | None) -> datetime:
     return now or datetime.now(UTC).replace(second=0, microsecond=0)
 
 
+HOST_MHZ, HOST_MEM = 32 * 2600, 512 * GB  # 32 cores at 2.6 GHz, 512 GB RAM
+
+
 def _hosts(n: int) -> list[Host]:
     hosts = []
     for i in range(n):
         name = f"esx{i + 1:02d}.lab.local"
         state = "disconnected" if n >= 3 and i == n - 1 else "connected"
-        hosts.append(Host(f"host-{100 + i}", name, "Cluster-A" if i < (n + 1) // 2 else "Cluster-B",
-                          state, n >= 2 and i == 1))
+        maintenance = n >= 2 and i == 1
+        # usage from the index (no rng), one host above 85% memory; idle when in maintenance or disconnected
+        up = state == "connected" and not maintenance
+        cpu_pct, mem_pct = ((15 + 17 * i) % 80, (40 + 23 * i) % 95) if up else (0, 0)
+        hosts.append(Host(f"host-{100 + i}", name, state, maintenance, HOST_MHZ * cpu_pct // 100, HOST_MHZ,
+                          HOST_MEM * mem_pct // 100, HOST_MEM))
     return hosts
 
 
@@ -95,8 +102,8 @@ def generate_inventory(hosts: int = 6, vms: int = 80, seed: int = 42, now: datet
     def disks(sizes: list[int], ds: str) -> tuple[Disk, ...]:
         result = []
         for i, size in enumerate(sizes):
-            used = int(size * GB * rng.uniform(0.1, 0.95))
-            result.append(Disk(2000 + i, f"Hard disk {i + 1}", size * GB, used, ds))
+            rng.random()  # was the used size; kept so the rest of the mock data stays the same
+            result.append(Disk(2000 + i, f"Hard disk {i + 1}", size * GB, ds))
         return tuple(result)
 
     def make(i: int, name: str, desc: str, folder: str, os_: str, cpu: int, ram: int, sizes: list[int],
@@ -120,8 +127,6 @@ def generate_inventory(hosts: int = 6, vms: int = 80, seed: int = 42, now: datet
         guest_up = power == "poweredOn" and conn == "connected"
         all_tags = list(tags)
         env = ENV_BY_FOLDER.get(folder.split("/")[0])
-        if folder == "Dev/Test":
-            env = "test"
         if env and not template:
             all_tags.insert(0, ("env", env))
         return Vm(
@@ -147,7 +152,7 @@ def generate_inventory(hosts: int = 6, vms: int = 80, seed: int = 42, now: datet
         lambda i: make(i, "old-crm", "Legacy CRM. Decommission after the Q4 migration; do not power on "
                        "without asking the finance team first.", "Archive", W12, 2, 8, [120], [],
                        power="poweredOff"),
-        lambda i: make(i, "test-suspended01", "QA sandbox, paused for investigation", "Dev/Test", U22, 2, 8,
+        lambda i: make(i, "test-suspended01", "QA sandbox, paused for investigation", "Test", U22, 2, 8,
                        [], [], power="suspended", host=host_list[0]),
         lambda i: make(i, "db-warehouse01", "Analytics warehouse (4 disks)", "Production/DB", R9, 16, 128,
                        [500, 500, 200], [("team", "data"), ("backup", "daily")], power="poweredOn",

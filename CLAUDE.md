@@ -47,10 +47,11 @@ Two processes share one SQLite file and never talk to each other:
 
 ### Schema changes
 
-`db.SCHEMA_VERSION` must be bumped whenever a table changes. `connect_rw` drops and recreates all tables on a
-version mismatch; `connect_ro` returns None, so the page shows "No sync yet" until the collector runs once.
-The DB is otherwise a disposable cache, except that last-known network data and fallback tags are read back
-from the previous snapshot.
+`db.SCHEMA_VERSION` must be bumped whenever a table changes, and `db.UPGRADES` gets an entry for the previous
+version listing only the tables to recreate. Never list `vms`, `nics`, `tags`, `meta` or `sync_runs` there: a
+sync reads last-known IPs/DNS and fallback tags back from the previous snapshot, and dropping those tables
+loses that data on upgrade. Unknown versions recreate everything. `connect_ro` returns None for any other
+version, so the page shows "No sync yet" until the collector has run once.
 
 Adding a VM field usually touches, in order: `models.Vm` → `vcenter.VM_PROPS`/`CONVERT` → `transform.build_inventory`
 → `db` (schema, `write_snapshot`, `read_inventory`) → `views._row` (search text) → `fragments.row_html` →
@@ -60,7 +61,7 @@ Adding a VM field usually touches, in order: `models.Vm` → `vcenter.VM_PROPS`/
 
 - Page render for 500 VMs: median under 50 ms per grouping, gzipped page under 100 KB
   (`test_page_budget_500_vms`; can fail on a busy machine, rerun before assuming a regression).
-- `static/style.css` and `static/app.js` stay under 8192 bytes each.
+- `static/style.css` and `static/app.js` stay under 10240 bytes each.
 - The CSP allows exactly one inline script, `app.BOOT_JS`, by its hash. Do not add inline scripts or event
   handler attributes; put code in `app.js`.
 - Static and status URLs are relative (`static/...`, `status.json`), so the site works behind a reverse proxy

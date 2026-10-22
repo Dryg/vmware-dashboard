@@ -66,14 +66,14 @@ def test_small_counts_still_cover_cases():
     assert any(v.is_template for v in inv.vms)
 
 
-def test_disks_reference_existing_datastores_and_used_le_capacity():
+def test_disks_reference_existing_datastores():
     inv = generate_inventory(now=NOW)
     names = {d.name for d in inv.datastores}
     for v in inv.vms:
         assert v.datastore_path.startswith("[") and v.datastore_path.endswith("/")
         for d in v.disks:
             assert d.datastore in names
-            assert 0 <= d.used_bytes <= d.capacity_bytes
+            assert d.capacity_bytes > 0
 
 
 def test_generate_db_writes_runs(tmp_path):
