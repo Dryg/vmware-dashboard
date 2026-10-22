@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vmdash{{ ' · ' ~ status.datacenter if status.datacenter }}</title>
+<script>try{var d=document.documentElement;if(localStorage.getItem("vmdash.theme")==="dark")d.dataset.theme="dark";if(localStorage.getItem("vmdash.tpl")==="1")d.classList.add("show-tpl")}catch(e){}</script>
+<link rel="stylesheet" href="{{ static_url('style.css') }}">
+</head>
+<body data-snapshot="{{ status.snapshot_id or '' }}" data-group="{{ group }}">
+<header class="top">
+ <div class="r1 gut">
+  <div class="brand"><strong>vmdash</strong><span>{{ status.vcenter_host }}{{ ' · ' ~ status.datacenter if status.datacenter }}</span></div>
+  <div class="search">
+   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="m11 11 3.5 3.5"/></svg>
+   <input id="q" type="search" placeholder="Search everything: name, tag, folder, OS, host, datastore, status…" aria-label="Search VMs" autocomplete="off" spellcheck="false">
+   <span class="kbd" id="kbd">/</span>
+  </div>
+  <div class="sync" id="sync" data-state="{{ badge.state }}" aria-live="polite"><span class="dot"></span><div><div class="l1">{{ badge.line1 }}</div><div class="l2">{{ badge.line2 }}</div></div></div>
+  <button type="button" class="theme" id="theme" aria-label="Switch to dark mode" title="Switch to dark mode">
+   <svg class="i-moon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/></svg>
+   <svg class="i-sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3 3l1 1M12 12l1 1M3 13l1-1M12 4l1-1"/></svg>
+  </button>
+ </div>
+ <div class="r2 gut">
+  <span class="lbl">Group by</span>
+  <nav class="seg" aria-label="Group by">
+   {%- for key, label in GROUPS.items() %}
+   <a href="?group={{ key }}"{{ ' aria-current="page"'|safe if key == group }}>{{ label }}</a>
+   {%- endfor %}
+  </nav>
+  <label class="tgl"><input id="tpl" type="checkbox"> Show templates</label>
+  <button type="button" class="lnk" id="fold">Collapse all</button>
+  <span class="count" id="count"><b>{{ totals.vms }}</b> VMs</span>
+ </div>
+</header>
+<div id="banner" class="banner gut {{ badge.state }}"{{ ' hidden'|safe if not badge.banner }}>{{ badge.banner or '' }}</div>
+<div class="summary gut" id="summary">
+ <span><b data-sum="hosts">{{ totals.hosts }}</b> hosts</span>
+ <span><b data-sum="vms">{{ totals.vms }}</b> VMs (<span data-sum="running">{{ totals.running }}</span> running)</span>
+ <span><b data-sum="vcpu">{{ totals.vcpu }}</b> vCPU</span>
+ <span><b data-sum="ram">{{ totals.ram_gb }}</b> GB RAM</span>
+ <span><b data-sum="cap">{{ fmt_size(totals.cap) }}</b> provisioned, <span data-sum="used">{{ fmt_size(totals.used) }}</span> used</span>
+</div>
+<main class="gut">
+<div class="tw">
+<table id="t">
+<thead><tr><th>VM</th>{% if show_host %}<th>Host</th>{% endif %}<th>Status</th><th class="num">vCPU</th><th class="num">RAM GB</th><th>Location</th><th>Disks</th><th class="num">Total</th></tr></thead>
+{%- set cols = 8 if show_host else 7 %}
+{%- for g in groups %}
+<tbody class="grp" data-key="{{ g.key }}">
+<tr class="grow"><th colspan="{{ cols }}" scope="rowgroup"><button type="button" class="gbtn" aria-expanded="true"><span class="caret">▾</span><span class="gname">{{ g.label }}</span>
+{%- if g.host %}{% set hs = host_state(g.host) %}{% if g.host.cluster %}<span class="chip">{{ g.host.cluster }}</span>{% endif %}<span class="hs"><span class="dot {{ hs[1] }}"></span>{{ hs[0] }}</span>{% endif %}
+{%- if g.datastore %}{% set d = g.datastore %}{% set u = d.capacity_bytes - d.free_bytes %}<span class="dsu">{{ bar(u, d.capacity_bytes) }}{{ fmt_size(u) }} of {{ fmt_size(d.capacity_bytes) }} used ({{ pct(u, d.capacity_bytes) }}%)</span>{% endif -%}
+<span class="htot">{{ g.totals.vms }} VM{{ 's' if g.totals.vms != 1 }} · {{ g.totals.vcpu }} vCPU · {{ g.totals.ram_gb }} GB RAM · {{ fmt_size(g.totals.cap) }}</span></button></th></tr>
+
+{% for r in g.rows %}{{ row_html(r, show_host) }}{% endfor -%}
+</tbody>
+{%- else %}
+<tbody><tr class="empty"><td colspan="{{ cols }}">No VMs yet. This page fills in after the collector's first successful sync.</td></tr></tbody>
+{%- endfor %}
+<tbody id="nores" hidden><tr class="empty"><td colspan="{{ cols }}">Nothing matches your search.</td></tr></tbody>
+</table>
+</div>
+</main>
+<footer class="gut">vmdash · {% if status.snapshot_id %}snapshot #{{ status.snapshot_id }} · {% endif %}{{ inv.vms|length }} VMs · grouped by {{ GROUPS[group]|lower }}</footer>
+</body>
+</html>

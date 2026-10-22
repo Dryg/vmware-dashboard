@@ -219,6 +219,10 @@ def build_groups(inv: Inventory, group: str, now: datetime) -> list[Group]:
     return groups
 
 
+def totals_of(groups: list[Group]) -> Totals:
+    return _totals([r for g in groups for r in g.rows])
+
+
 def summary(inv: Inventory) -> Totals:
     hosts = {h.moref: h for h in inv.hosts}
     return _totals([_row(vm, hosts, datetime.now().astimezone()) for vm in inv.vms])
